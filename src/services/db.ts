@@ -6,13 +6,16 @@ import {
   query,
   where,
   orderBy,
+  limit,
   updateDoc,
   deleteDoc,
   getDoc,
-  writeBatch
+  writeBatch,
+  onSnapshot
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { securityFirewall } from './security';
+import { getTodayISODate, isMatchingFilterDate } from '../utils/date';
 import {
   EmployeeList,
   VerificationLog,
@@ -26,6 +29,7 @@ import {
 } from '../types';
 
 const LISTS_COLLECTION = 'employee_lists';
+const LISTS_DATA_COLLECTION = 'employee_lists_data';
 const EMPLOYEES_COLLECTION = 'employees';
 const LOGS_COLLECTION = 'verification_logs';
 const AUDIT_COLLECTION = 'audit_logs';
@@ -188,30 +192,20 @@ export async function initializeDatabase(): Promise<void> {
     localStorage.removeItem('permit_sys_employees_v1');
   } catch {}
 
-  // Sync admins from Firestore without overwriting custom modifications
+  // Sync admins from Firestore
   try {
-    const snap = await withTimeout(getDocs(collection(db, ADMINS_COLLECTION)), 1500);
+    const snap = await withTimeout(getDocs(collection(db, ADMINS_COLLECTION)), 2500);
     if (!snap.empty) {
       const remoteAdmins: AdminUser[] = [];
       snap.forEach(d => remoteAdmins.push(d.data() as AdminUser));
       if (remoteAdmins.length > 0) {
         setLocal(LOCAL_KEY_ADMINS, remoteAdmins);
-        return;
       }
     } else {
-      // If Firestore is empty, check if we have local admins to upload
-      const localAdmins = getLocal<AdminUser[]>(LOCAL_KEY_ADMINS, []);
-      if (localAdmins.length > 0) {
-        for (const adm of localAdmins) {
-          await withTimeout(setDoc(doc(db, ADMINS_COLLECTION, adm.id), adm), 1000);
-        }
-        return;
-      }
-
-      // If completely fresh instance, write initial seed once
+      // If Firestore is completely empty for admins, seed default admins
       setLocal(LOCAL_KEY_ADMINS, INITIAL_ADMINS);
       for (const adm of INITIAL_ADMINS) {
-        await withTimeout(setDoc(doc(db, ADMINS_COLLECTION, adm.id), adm), 1000);
+        await withTimeout(setDoc(doc(db, ADMINS_COLLECTION, adm.id), adm), 1500).catch(() => {});
       }
     }
   } catch {
@@ -240,54 +234,106 @@ export async function getActiveEmployeeList(): Promise<EmployeeList | null> {
 
 /**
  * Get all employee records associated with a specific uploaded list.
+ * Safely fetches chunked data from Firestore if not in local cache.
  */
 export async function getListEmployees(listId: string): Promise<ParsedEmployeeItem[]> {
   const empMap = getLocal<Record<string, any[]>>(LOCAL_KEY_EMPLOYEES, {});
-  const localList = empMap[listId] || [];
+  let localList = empMap[listId] || [];
+
+  // If local store is empty on this device, fetch from dedicated Firestore bundle / chunks
+  if (localList.length === 0) {
+    try {
+      // 1. Try reading manifest / single bundle doc
+      const dataSnap = await getDoc(doc(db, LISTS_DATA_COLLECTION, listId));
+      if (dataSnap.exists()) {
+        const data = dataSnap.data();
+        if (data?.employees && Array.isArray(data.employees) && data.employees.length > 0) {
+          localList = data.employees;
+        } else if (data?.totalChunks && data.totalChunks > 0) {
+          // Multi-chunk download in parallel
+          const chunkPromises: Promise<any>[] = [];
+          for (let i = 0; i < data.totalChunks; i++) {
+            chunkPromises.push(getDoc(doc(db, LISTS_DATA_COLLECTION, `${listId}_part_${i}`)));
+          }
+          const chunkSnaps = await Promise.all(chunkPromises);
+          const merged: any[] = [];
+          for (const cSnap of chunkSnaps) {
+            if (cSnap.exists() && Array.isArray(cSnap.data()?.employees)) {
+              merged.push(...cSnap.data().employees);
+            }
+          }
+          localList = merged;
+        }
+      }
+
+      // 2. Query chunk documents if manifest didn't contain direct items
+      if (localList.length === 0) {
+        const q = query(collection(db, LISTS_DATA_COLLECTION), where('listId', '==', listId));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const chunkDocs = snap.docs.map(d => d.data());
+          chunkDocs.sort((a, b) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
+          const merged: any[] = [];
+          for (const c of chunkDocs) {
+            if (Array.isArray(c.employees)) {
+              merged.push(...c.employees);
+            }
+          }
+          localList = merged;
+        }
+      }
+
+      // 3. Fallback to EMPLOYEES_COLLECTION if older schema
+      if (localList.length === 0) {
+        const q = query(collection(db, EMPLOYEES_COLLECTION), where('listId', '==', listId));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          snap.forEach(d => {
+            const data = d.data();
+            if (data.employeeNumber) {
+              localList.push({
+                number: String(data.employeeNumber),
+                name: data.employeeName || undefined,
+                allowedRoute: data.allowedRoute || undefined,
+                department: data.department || undefined
+              });
+            }
+          });
+        }
+      }
+
+      if (localList.length > 0) {
+        empMap[listId] = localList;
+        setLocal(LOCAL_KEY_EMPLOYEES, empMap);
+      }
+    } catch (err) {
+      console.error('Error fetching list employee data from Firestore:', err);
+    }
+  }
+
   const results: ParsedEmployeeItem[] = [];
 
   localList.forEach(item => {
     if (typeof item === 'string') {
       results.push({
-        number: item
+        number: item.trim()
       });
     } else if (item && item.number) {
       results.push({
-        number: String(item.number),
-        name: item.name || undefined,
-        allowedRoute: item.allowedRoute || undefined,
-        department: item.department || undefined
+        number: String(item.number).trim(),
+        name: item.name ? String(item.name).trim() : undefined,
+        allowedRoute: item.allowedRoute ? String(item.allowedRoute).trim() : undefined,
+        department: item.department ? String(item.department).trim() : undefined
       });
     }
   });
-
-  // Supplement from Firestore if local is empty
-  try {
-    const q = query(collection(db, EMPLOYEES_COLLECTION), where('listId', '==', listId));
-    const snap = await withTimeout(getDocs(q), 1500);
-    if (!snap.empty && results.length === 0) {
-      snap.forEach(d => {
-        const data = d.data();
-        if (data.employeeNumber) {
-          results.push({
-            number: String(data.employeeNumber),
-            name: data.employeeName || undefined,
-            allowedRoute: data.allowedRoute || undefined,
-            department: data.department || undefined
-          });
-        }
-      });
-    }
-  } catch {
-    // Graceful offline fallback
-  }
 
   return results;
 }
 
 /**
  * Preloads all active employee numbers and details from ALL active approved lists into memory for instantaneous O(1) lookup.
- * Strictly uses data from uploaded lists without synthesizing mock names or lists.
+ * Strictly uses data from uploaded lists across all connected devices.
  */
 export async function loadActiveEmployeesSet(targetListId?: string): Promise<Set<string>> {
   const activeLists = await getActiveEmployeeLists();
@@ -306,65 +352,26 @@ export async function loadActiveEmployeesSet(targetListId?: string): Promise<Set
     listVersion?: number;
   }>();
 
-  const empMap = getLocal<Record<string, any[]>>(LOCAL_KEY_EMPLOYEES, {});
   const listsToScan = targetListId 
     ? activeLists.filter(l => l.id === targetListId)
     : activeLists;
 
   for (const aList of listsToScan) {
-    const localList = empMap[aList.id] || [];
-    localList.forEach(item => {
-      if (typeof item === 'string') {
-        const num = item.trim();
-        if (num) {
-          set.add(num);
-          if (!detailsMap.has(num)) {
-            detailsMap.set(num, {
-              listId: aList.id,
-              listTitle: aList.title,
-              listVersion: aList.versionNumber
-            });
-          }
-        }
-      } else if (item && item.number) {
-        const num = String(item.number).trim();
-        if (num) {
-          set.add(num);
-          detailsMap.set(num, {
-            name: item.name ? String(item.name).trim() : undefined,
-            allowedRoute: item.allowedRoute ? String(item.allowedRoute).trim() : undefined,
-            department: item.department ? String(item.department).trim() : undefined,
-            listId: aList.id,
-            listTitle: aList.title,
-            listVersion: aList.versionNumber
-          });
-        }
+    const listEmployees = await getListEmployees(aList.id);
+    listEmployees.forEach(emp => {
+      const num = String(emp.number).trim();
+      if (num) {
+        set.add(num);
+        detailsMap.set(num, {
+          name: emp.name ? String(emp.name).trim() : undefined,
+          allowedRoute: emp.allowedRoute ? String(emp.allowedRoute).trim() : undefined,
+          department: emp.department ? String(emp.department).trim() : undefined,
+          listId: aList.id,
+          listTitle: aList.title,
+          listVersion: aList.versionNumber
+        });
       }
     });
-
-    // Query Firestore to supplement if available
-    try {
-      const q = query(collection(db, EMPLOYEES_COLLECTION), where('listId', '==', aList.id));
-      const snap = await withTimeout(getDocs(q), 1500);
-      snap.forEach(d => {
-        const data = d.data();
-        if (data.employeeNumber) {
-          const num = String(data.employeeNumber).trim();
-          set.add(num);
-          const existing = detailsMap.get(num);
-          detailsMap.set(num, {
-            name: data.employeeName ? String(data.employeeName).trim() : existing?.name,
-            allowedRoute: data.allowedRoute ? String(data.allowedRoute).trim() : existing?.allowedRoute,
-            department: data.department ? String(data.department).trim() : existing?.department,
-            listId: aList.id,
-            listTitle: aList.title,
-            listVersion: aList.versionNumber
-          });
-        }
-      });
-    } catch {
-      // Graceful offline fallback
-    }
   }
 
   activeEmployeesCache = set;
@@ -433,70 +440,75 @@ export async function verifyEmployeeTravel(employeeNumberRaw: string): Promise<V
     checkedAt: inquiryTime,
   };
 
-  // Record in verification logs
-  recordVerificationLog({
-    employeeNumber,
-    employeeName,
-    allowedRoute,
-    result: isAuthorized ? 'AUTHORIZED' : 'NOT_AUTHORIZED',
-    listId: matchedList.id,
-    listTitle: matchedList.title,
-    checkedAt: inquiryTime,
-    userAgent: navigator.userAgent
-  }).catch(err => console.error('Verification log recording error:', err));
+  // Record in centralized Firestore verification logs reliably
+  try {
+    await recordVerificationLog({
+      employeeNumber,
+      employeeName,
+      allowedRoute,
+      result: isAuthorized ? 'AUTHORIZED' : 'NOT_AUTHORIZED',
+      listId: matchedList.id,
+      listTitle: matchedList.title,
+      checkedAt: inquiryTime,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown'
+    });
+  } catch (err) {
+    console.error('Verification log recording error:', err);
+  }
 
   return result;
 }
 
 /**
- * Records a verification log entry
+ * Records a verification log entry to both local cache and Firestore cloud database.
  */
 export async function recordVerificationLog(log: Omit<VerificationLog, 'id'>): Promise<void> {
   const id = 'log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7);
   const fullLog: VerificationLog = { ...log, id };
 
-  // Local storage
-  const logs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
-  logs.unshift(fullLog);
-  // Keep up to 2000 logs in local storage
-  setLocal(LOCAL_KEY_LOGS, logs.slice(0, 2000));
-
-  // Firestore sync
+  // 1. Local storage for immediate availability
   try {
-    await withTimeout(setDoc(doc(db, LOGS_COLLECTION, id), fullLog), 1500);
-  } catch {
-    // Kept in local storage
+    const logs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
+    const updated = [fullLog, ...logs.filter(l => l.id !== id)].slice(0, 2000);
+    setLocal(LOCAL_KEY_LOGS, updated);
+  } catch (err) {
+    console.error('Local log write error:', err);
   }
+
+  // 2. Direct write to central Firestore collection
+  try {
+    await setDoc(doc(db, LOGS_COLLECTION, id), fullLog);
+  } catch (err) {
+    console.error('Firestore log write error:', err);
+  }
+
+  // 3. Instant local notification
+  broadcastStorageChange('new_verification_log', fullLog);
 }
 
 /**
  * Get all employee lists.
- * STRICTLY returns only uploaded lists (defaults to empty array []).
+ * Synchronizes with Firestore cloud database as authoritative source of truth.
  */
 export async function getAllEmployeeLists(): Promise<EmployeeList[]> {
-  const localLists = getLocal<EmployeeList[]>(LOCAL_KEY_LISTS, []);
-  
-  // Background Firestore sync
   try {
     const q = query(collection(db, LISTS_COLLECTION), orderBy('createdAt', 'desc'));
-    const snap = await withTimeout(getDocs(q), 1000);
-    if (!snap.empty) {
-      const remoteLists = snap.docs.map(d => d.data() as EmployeeList);
-      // Synchronize only if local list is empty or remote has fresh records
-      if (localLists.length === 0 && remoteLists.length > 0) {
-        setLocal(LOCAL_KEY_LISTS, remoteLists);
-        return remoteLists;
-      }
-    }
-  } catch {
-    // Return instant local cache
+    const snap = await getDocs(q);
+    const remoteLists = snap.docs.map(d => d.data() as EmployeeList);
+    const sorted = remoteLists.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    setLocal(LOCAL_KEY_LISTS, sorted);
+    return sorted;
+  } catch (err) {
+    console.warn('Firestore getAllEmployeeLists offline fallback:', err);
+    return getLocal<EmployeeList[]>(LOCAL_KEY_LISTS, []);
   }
-
-  return localLists;
 }
 
 /**
- * Creates a new employee list and uploads the employee numbers and names
+ * Creates a new employee list and uploads the employee numbers and names to Firestore.
+ * Automatically chunks large employee datasets to stay safely within Firestore document limits.
  */
 export async function createEmployeeList(
   meta: Omit<EmployeeList, 'id' | 'createdAt' | 'versionNumber'>,
@@ -528,33 +540,55 @@ export async function createEmployeeList(
   };
 
   // Store in LocalStorage synchronously
-  const updatedLists = [newList, ...existingLists];
+  const updatedLists = [newList, ...existingLists.filter(l => l.id !== listId)];
   setLocal(LOCAL_KEY_LISTS, updatedLists);
 
   const empMap = getLocal<Record<string, any>>(LOCAL_KEY_EMPLOYEES, {});
   empMap[listId] = parsedEmployees;
   setLocal(LOCAL_KEY_EMPLOYEES, empMap);
 
-  // Broadcast change immediately
+  // Invalidate memory caches and broadcast
+  flushMemoryCaches();
   broadcastStorageChange('create_list', { listId, newList });
 
-  // Sync to Firestore asynchronously
+  // Sync to Firestore cloud database with chunking
   try {
-    await withTimeout(setDoc(doc(db, LISTS_COLLECTION, listId), newList), 2000);
-    for (let i = 0; i < Math.min(parsedEmployees.length, 500); i++) {
-      const emp = parsedEmployees[i];
-      await withTimeout(setDoc(doc(db, EMPLOYEES_COLLECTION, `${listId}_${emp.number}`), {
-        id: `${listId}_${emp.number}`,
-        employeeNumber: emp.number,
-        employeeName: emp.name || null,
-        allowedRoute: emp.allowedRoute || null,
-        department: emp.department || null,
-        listId: listId,
-        createdAt: newList.createdAt
-      }), 1000);
+    // 1. Save list metadata
+    await setDoc(doc(db, LISTS_COLLECTION, listId), newList);
+
+    // 2. Chunk employees in batches of 800 items (~60KB per document, well below 1MB limit)
+    const CHUNK_SIZE = 800;
+    const totalChunks = Math.ceil(parsedEmployees.length / CHUNK_SIZE) || 1;
+    const writePromises: Promise<any>[] = [];
+
+    for (let i = 0; i < totalChunks; i++) {
+      const chunk = parsedEmployees.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      const chunkDocId = `${listId}_part_${i}`;
+      writePromises.push(
+        setDoc(doc(db, LISTS_DATA_COLLECTION, chunkDocId), {
+          listId,
+          chunkIndex: i,
+          totalChunks,
+          totalRecords: parsedEmployees.length,
+          employees: chunk,
+          createdAt: newList.createdAt
+        })
+      );
     }
-  } catch {
-    // Saved in local resilient store
+
+    // 3. Save manifest document
+    writePromises.push(
+      setDoc(doc(db, LISTS_DATA_COLLECTION, listId), {
+        listId,
+        totalChunks,
+        totalRecords: parsedEmployees.length,
+        createdAt: newList.createdAt
+      })
+    );
+
+    await Promise.all(writePromises);
+  } catch (err) {
+    console.error('Firestore list creation sync error:', err);
   }
 
   return newList;
@@ -598,22 +632,30 @@ export async function approveEmployeeList(
   });
 
   setLocal(LOCAL_KEY_LISTS, updatedLists);
+  flushMemoryCaches();
 
   // Instant notification
   broadcastStorageChange('approve_list', { listId, archiveOtherLists });
 
   // Sync to Firestore
   try {
+    const batch = writeBatch(db);
     for (const l of updatedLists) {
-      if (l.id === listId || (archiveOtherLists && l.status === 'archived')) {
-        await withTimeout(updateDoc(doc(db, LISTS_COLLECTION, l.id), {
-          status: l.status,
-          ...(l.id === listId ? { approvedBy, approvedAt: now } : {})
-        }), 1500);
+      if (l.id === listId) {
+        batch.update(doc(db, LISTS_COLLECTION, l.id), {
+          status: 'active',
+          approvedBy,
+          approvedAt: now
+        });
+      } else if (archiveOtherLists && l.status === 'archived') {
+        batch.update(doc(db, LISTS_COLLECTION, l.id), {
+          status: 'archived'
+        });
       }
     }
-  } catch {
-    // Saved in local resilient store
+    await batch.commit();
+  } catch (err) {
+    console.error('Firestore list approval update error:', err);
   }
 
   // Record Audit Log
@@ -625,7 +667,7 @@ export async function approveEmployeeList(
     entityId: listId,
     details: `تم اعتماد وتفعيل القائمة (${listToApprove.title}) بعدد ${listToApprove.totalRecords} موظفاً بنجاح`,
     createdAt: now
-  });
+  }).catch(() => {});
 }
 
 /**
@@ -638,13 +680,14 @@ export async function archiveEmployeeList(listId: string, adminName: string): Pr
 
   const updatedLists = lists.map(l => l.id === listId ? { ...l, status: 'archived' as ListStatus } : l);
   setLocal(LOCAL_KEY_LISTS, updatedLists);
+  flushMemoryCaches();
 
   broadcastStorageChange('archive_list', { listId });
 
   try {
-    await withTimeout(updateDoc(doc(db, LISTS_COLLECTION, listId), { status: 'archived' }), 1500);
-  } catch {
-    // Saved in local resilient store
+    await updateDoc(doc(db, LISTS_COLLECTION, listId), { status: 'archived' });
+  } catch (err) {
+    console.error('Firestore list archive error:', err);
   }
 
   await recordAuditLog({
@@ -655,7 +698,7 @@ export async function archiveEmployeeList(listId: string, adminName: string): Pr
     entityId: listId,
     details: `تم أرشفة القائمة (${target.title}) يدوياً`,
     createdAt: new Date().toISOString()
-  });
+  }).catch(() => {});
 }
 
 /**
@@ -663,9 +706,8 @@ export async function archiveEmployeeList(listId: string, adminName: string): Pr
  * Completely cleans memory, local storage, and database so no old records linger.
  */
 export async function deleteEmployeeList(listId: string, adminName: string): Promise<void> {
-  const lists = await getAllEmployeeLists();
+  const lists = getLocal<EmployeeList[]>(LOCAL_KEY_LISTS, []);
   const target = lists.find(l => l.id === listId);
-  if (!target) return;
 
   // 1. Instant Synchronous Clean-up in LocalStorage
   const remainingLists = lists.filter(l => l.id !== listId);
@@ -676,55 +718,80 @@ export async function deleteEmployeeList(listId: string, adminName: string): Pro
   setLocal(LOCAL_KEY_EMPLOYEES, empMap);
 
   // 2. Instant Memory Invalidation & Global Broadcast
+  flushMemoryCaches();
   broadcastStorageChange('delete_list', { listId });
 
-  // 3. Background Deletion in Firestore
+  // 3. Permanent Deletion in Firestore
   try {
-    await withTimeout(deleteDoc(doc(db, LISTS_COLLECTION, listId)), 2000);
-    // Query and delete employees from collection
+    await deleteDoc(doc(db, LISTS_COLLECTION, listId));
+    await deleteDoc(doc(db, LISTS_DATA_COLLECTION, listId)).catch(() => {});
+
+    // Delete chunks
+    const chunkQuery = query(collection(db, LISTS_DATA_COLLECTION), where('listId', '==', listId));
+    const chunkSnap = await getDocs(chunkQuery);
+    if (!chunkSnap.empty) {
+      const batch = writeBatch(db);
+      chunkSnap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit().catch(() => {});
+    }
+
+    // Query and delete employees from legacy collection if any
     const q = query(collection(db, EMPLOYEES_COLLECTION), where('listId', '==', listId));
-    const snap = await withTimeout(getDocs(q), 2000);
+    const snap = await getDocs(q);
     if (!snap.empty) {
       const batch = writeBatch(db);
       snap.docs.forEach(docSnap => batch.delete(docSnap.ref));
-      await withTimeout(batch.commit(), 2000);
+      await batch.commit().catch(() => {});
     }
-  } catch {
-    // Local storage is already cleansed
+  } catch (err) {
+    console.error('Firestore list deletion error:', err);
   }
 
   // 4. Record Audit Log
-  await recordAuditLog({
-    adminId: 'current-admin',
-    adminName,
-    action: `حذف القائمة #${target.versionNumber}`,
-    entityType: 'employee_lists',
-    entityId: listId,
-    details: `تم حذف القائمة (${target.title}) وملفها (${target.fileName}) وتطهير كافة سجلات موظفيها نهائياً من النظام`,
-    createdAt: new Date().toISOString()
-  });
+  if (target) {
+    await recordAuditLog({
+      adminId: 'current-admin',
+      adminName,
+      action: `حذف القائمة #${target.versionNumber}`,
+      entityType: 'employee_lists',
+      entityId: listId,
+      details: `تم حذف القائمة (${target.title}) وملفها (${target.fileName}) وتطهير كافة سجلات موظفيها نهائياً من النظام`,
+      createdAt: new Date().toISOString()
+    }).catch(() => {});
+  }
 }
 
 /**
  * Completely clears ALL lists and employee data from the system with immediate purge.
  */
 export async function clearAllEmployeeLists(adminName: string): Promise<void> {
-  const lists = await getAllEmployeeLists();
+  const lists = getLocal<EmployeeList[]>(LOCAL_KEY_LISTS, []);
   
   // 1. Clear LocalStorage immediately
   setLocal(LOCAL_KEY_LISTS, []);
   setLocal(LOCAL_KEY_EMPLOYEES, {});
 
   // 2. Invalidate cache and broadcast
+  flushMemoryCaches();
   broadcastStorageChange('clear_all_lists');
 
-  // 3. Background Firestore clear
+  // 3. Clear Firestore lists & data
   try {
-    for (const l of lists) {
-      await withTimeout(deleteDoc(doc(db, LISTS_COLLECTION, l.id)), 1000);
+    const listSnap = await getDocs(collection(db, LISTS_COLLECTION));
+    if (!listSnap.empty) {
+      const batch = writeBatch(db);
+      listSnap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit().catch(() => {});
     }
-  } catch {
-    // Local store is clean
+
+    const dataSnap = await getDocs(collection(db, LISTS_DATA_COLLECTION));
+    if (!dataSnap.empty) {
+      const batch = writeBatch(db);
+      dataSnap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit().catch(() => {});
+    }
+  } catch (err) {
+    console.error('Firestore clear all lists error:', err);
   }
 
   // 4. Audit Log
@@ -736,30 +803,164 @@ export async function clearAllEmployeeLists(adminName: string): Promise<void> {
     entityId: 'ALL_LISTS',
     details: `تم تطهير وحذف كافة القوائم (${lists.length} قائمة) وسجلات موظفيها نهائياً من النظام`,
     createdAt: new Date().toISOString()
+  }).catch(() => {});
+}
+
+/**
+ * Migrates all verification logs from localStorage into the centralized Firestore collection.
+ * Only uploads unmigrated logs when explicitly invoked.
+ */
+export async function migrateLocalLogsToFirestore(): Promise<{
+  totalLocal: number;
+  migratedCount: number;
+  alreadySyncedCount: number;
+  success: boolean;
+  message?: string;
+}> {
+  const localLogs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
+  if (localLogs.length === 0) {
+    return {
+      totalLocal: 0,
+      migratedCount: 0,
+      alreadySyncedCount: 0,
+      success: true,
+      message: 'لا توجد سجلات محلية في هذا المتصفح تحتاج إلى ترحيل.'
+    };
+  }
+
+  try {
+    // 1. Fetch existing remote logs IDs to prevent duplicate writes
+    const snap = await getDocs(collection(db, LOGS_COLLECTION));
+    const remoteIdSet = new Set<string>();
+    snap.forEach(d => remoteIdSet.add(d.id));
+
+    const logsToMigrate = localLogs.filter(l => l && l.id && !remoteIdSet.has(l.id));
+
+    if (logsToMigrate.length > 0) {
+      const batchSize = 400;
+      for (let i = 0; i < logsToMigrate.length; i += batchSize) {
+        const chunk = logsToMigrate.slice(i, i + batchSize);
+        const batch = writeBatch(db);
+        chunk.forEach(log => {
+          const logRef = doc(db, LOGS_COLLECTION, log.id);
+          batch.set(logRef, log);
+        });
+        await batch.commit();
+      }
+    }
+
+    const remoteLogs: VerificationLog[] = snap.docs.map(d => d.data() as VerificationLog);
+    const merged = remoteLogs.sort(
+      (a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime()
+    );
+    setLocal(LOCAL_KEY_LOGS, merged.slice(0, 2000));
+    broadcastStorageChange('migrate_logs', { count: logsToMigrate.length });
+
+    return {
+      totalLocal: localLogs.length,
+      migratedCount: logsToMigrate.length,
+      alreadySyncedCount: localLogs.length - logsToMigrate.length,
+      success: true,
+      message: logsToMigrate.length > 0
+        ? `تم بنجاح ترحيل ومزامنة ${logsToMigrate.length} سجل إلى قاعدة البيانات السحابية المركزية.`
+        : 'كافة السجلات المحلية متزامنة بالفعل ومحدثة مع السحابة المركزية.'
+    };
+  } catch (err) {
+    console.error('Error during logs migration to Firestore:', err);
+    return {
+      totalLocal: localLogs.length,
+      migratedCount: 0,
+      alreadySyncedCount: 0,
+      success: false,
+      message: 'تعذر الاتصال بالسحابة لترحيل السجلات. يرجى التحقق من الاتصال بالإنترنت.'
+    };
+  }
+}
+
+/**
+ * Clear all verification logs across local and Firestore database
+ */
+export async function clearVerificationLogs(adminName: string): Promise<void> {
+  // 1. Clear local storage
+  setLocal(LOCAL_KEY_LOGS, []);
+
+  // 2. Clear Firestore verification logs
+  try {
+    const snap = await getDocs(collection(db, LOGS_COLLECTION));
+    if (!snap.empty) {
+      const batchSize = 400;
+      const docs = snap.docs;
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const chunk = docs.slice(i, i + batchSize);
+        const batch = writeBatch(db);
+        chunk.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+    }
+  } catch (err) {
+    console.error('Error clearing Firestore logs:', err);
+  }
+
+  broadcastStorageChange('clear_verification_logs');
+
+  await recordAuditLog({
+    adminId: 'current-admin',
+    adminName,
+    action: 'تطهير سجلات التحقق',
+    entityType: 'LOGS_PURGE',
+    entityId: 'ALL_VERIFICATION_LOGS',
+    details: `تم تفريغ وحذف كافة سجلات التحقق من النظام وقاعدة البيانات السحابية`,
+    createdAt: new Date().toISOString()
   });
 }
 
 /**
  * Get Verification Logs with filtering and pagination
+ * Relies on Firestore as authoritative source of truth, gracefully caching locally.
  */
 export async function getVerificationLogs(options?: {
   employeeNumber?: string;
   result?: 'ALL' | 'AUTHORIZED' | 'NOT_AUTHORIZED';
   startDate?: string;
   endDate?: string;
+  dateFilter?: string;
   limitCount?: number;
 }): Promise<VerificationLog[]> {
-  const localLogs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
+  let allLogs: VerificationLog[] = [];
 
-  let filtered = [...localLogs];
+  try {
+    const q = query(
+      collection(db, LOGS_COLLECTION),
+      orderBy('checkedAt', 'desc'),
+      limit(options?.limitCount || 500)
+    );
+    const snap = await getDocs(q);
+    const remoteLogs = snap.docs.map(d => d.data() as VerificationLog);
+    allLogs = remoteLogs.sort(
+      (a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime()
+    );
+    setLocal(LOCAL_KEY_LOGS, allLogs.slice(0, 2000));
+  } catch (err) {
+    console.warn('Firestore getVerificationLogs offline fallback:', err);
+    allLogs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
+  }
+
+  let filtered = allLogs;
 
   if (options?.employeeNumber) {
     const qNum = options.employeeNumber.trim();
-    filtered = filtered.filter(l => l.employeeNumber.includes(qNum));
+    filtered = filtered.filter(l => 
+      (l.employeeNumber && l.employeeNumber.includes(qNum)) ||
+      (l.employeeName && l.employeeName.includes(qNum))
+    );
   }
 
   if (options?.result && options.result !== 'ALL') {
     filtered = filtered.filter(l => l.result === options.result);
+  }
+
+  if (options?.dateFilter) {
+    filtered = filtered.filter(l => isMatchingFilterDate(l.checkedAt, options.dateFilter!));
   }
 
   if (options?.startDate) {
@@ -780,6 +981,74 @@ export async function getVerificationLogs(options?: {
 }
 
 /**
+ * Real-time subscription to Verification Logs via Firestore onSnapshot.
+ * Updates listener immediately whenever any mobile/desktop device logs a verification.
+ */
+export function subscribeToVerificationLogs(
+  onUpdate: (logs: VerificationLog[]) => void,
+  onError?: (error: any) => void
+): () => void {
+  try {
+    const q = query(
+      collection(db, LOGS_COLLECTION),
+      orderBy('checkedAt', 'desc'),
+      limit(500)
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const remoteLogs = snapshot.docs.map(d => d.data() as VerificationLog);
+        const sorted = remoteLogs.sort(
+          (a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime()
+        );
+        setLocal(LOCAL_KEY_LOGS, sorted.slice(0, 2000));
+        onUpdate(sorted);
+      },
+      (err) => {
+        console.warn('Real-time logs subscription note:', err);
+        if (onError) onError(err);
+      }
+    );
+    return unsubscribe;
+  } catch (err) {
+    console.error('Failed to initialize logs subscription:', err);
+    return () => {};
+  }
+}
+
+/**
+ * Real-time subscription to Employee Lists via Firestore onSnapshot.
+ */
+export function subscribeToEmployeeLists(
+  onUpdate: (lists: EmployeeList[]) => void,
+  onError?: (error: any) => void
+): () => void {
+  try {
+    const q = query(collection(db, LISTS_COLLECTION), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const remoteLists = snapshot.docs.map(d => d.data() as EmployeeList);
+        const sorted = remoteLists.sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        setLocal(LOCAL_KEY_LISTS, sorted);
+        flushMemoryCaches();
+        onUpdate(sorted);
+      },
+      (err) => {
+        console.warn('Real-time lists subscription note:', err);
+        if (onError) onError(err);
+      }
+    );
+    return unsubscribe;
+  } catch (err) {
+    console.error('Failed to initialize lists subscription:', err);
+    return () => {};
+  }
+}
+
+/**
  * Get System Dashboard Statistics
  */
 export async function getDashboardStats() {
@@ -793,6 +1062,11 @@ export async function getDashboardStats() {
   const authorizedCount = logs.filter(l => l.result === 'AUTHORIZED').length;
   const notAuthorizedCount = logs.filter(l => l.result === 'NOT_AUTHORIZED').length;
 
+  const todayStr = getTodayISODate();
+  const todayLogs = logs.filter(l => isMatchingFilterDate(l.checkedAt, todayStr));
+  const todayAuthorized = todayLogs.filter(l => l.result === 'AUTHORIZED').length;
+  const todayNotAuthorized = todayLogs.filter(l => l.result === 'NOT_AUTHORIZED').length;
+
   return {
     activeList,
     activeListsCount: activeLists.length,
@@ -802,7 +1076,10 @@ export async function getDashboardStats() {
     totalVerifications: logs.length,
     authorizedCount,
     notAuthorizedCount,
-    recentLogs: logs.slice(0, 8),
+    todayVerifications: todayLogs.length,
+    todayAuthorized,
+    todayNotAuthorized,
+    recentLogs: logs.slice(0, 10),
     recentLists: lists.slice(0, 5)
   };
 }

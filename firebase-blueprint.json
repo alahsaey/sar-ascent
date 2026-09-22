@@ -42,6 +42,16 @@
       }
     },
     {
+      "name": "employee_lists_data",
+      "description": "Full employee bundle data for rapid cross-device sync",
+      "fields": {
+        "listId": "string",
+        "employees": "array",
+        "totalRecords": "number",
+        "createdAt": "string"
+      }
+    },
+    {
       "name": "verification_logs",
       "description": "Logs of all employee travel permit checks",
       "fields": {

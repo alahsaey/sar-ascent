@@ -18,7 +18,7 @@ import {
   Clock,
   Timer
 } from 'lucide-react';
-import { verifyEmployeeTravel, getActiveEmployeeList } from '../../services/db';
+import { verifyEmployeeTravel, getActiveEmployeeList, subscribeToEmployeeLists } from '../../services/db';
 import { VerificationResult, EmployeeList } from '../../types';
 import { formatArabicDateTime, formatArabicDateTimeWithSeconds } from '../../utils/date';
 import { SarLogo } from '../SarLogo';
@@ -54,15 +54,20 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({
     const refreshActiveList = () => {
       getActiveEmployeeList().then(list => {
         setActiveList(list);
-      });
+      }).catch(() => {});
     };
     
     refreshActiveList();
 
+    // 1. Real-time Firestore lists subscription
+    const unsubLists = subscribeToEmployeeLists((lists) => {
+      const active = lists.find(l => l.status === 'active') || null;
+      setActiveList(active);
+    });
+
+    // 2. Storage & Broadcast sync for same-browser windows
     const handleSync = () => {
       refreshActiveList();
-      setResult(null);
-      setErrorMessage(null);
     };
 
     window.addEventListener('sar-storage-changed', handleSync);
@@ -70,6 +75,7 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({
 
     return () => {
       clearInterval(interval);
+      unsubLists();
       window.removeEventListener('sar-storage-changed', handleSync);
       window.removeEventListener('storage', handleSync);
     };

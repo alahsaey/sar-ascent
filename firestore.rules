@@ -18,6 +18,12 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    // Employee Lists Full Data
+    match /employee_lists_data/{listId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     // Employees collection - keyed or queried
     match /employees/{employeeId} {
       // Public can read to verify individual number, but cannot list entire collection arbitrarily

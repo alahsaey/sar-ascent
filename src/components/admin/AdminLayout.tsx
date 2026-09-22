@@ -28,6 +28,8 @@ import {
   getVerificationLogs,
   getAuditLogs,
   getAdminUsers,
+  subscribeToVerificationLogs,
+  subscribeToEmployeeLists
 } from '../../services/db';
 
 interface AdminLayoutProps {
@@ -97,6 +99,19 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
   useEffect(() => {
     loadAllData();
 
+    // 1. Real-time Firestore logs listener (instant multi-device sync)
+    const unsubLogs = subscribeToVerificationLogs((newLogs) => {
+      setLogs(newLogs);
+      getDashboardStats().then((s) => setStats(s)).catch(() => {});
+    });
+
+    // 2. Real-time Firestore lists listener (instant list updates)
+    const unsubLists = subscribeToEmployeeLists((newLists) => {
+      setLists(newLists);
+      getDashboardStats().then((s) => setStats(s)).catch(() => {});
+    });
+
+    // 3. Storage and broadcast listeners for same-browser windows
     const handleStorageChange = () => {
       loadAllData();
     };
@@ -104,9 +119,24 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
     window.addEventListener('sar-storage-changed', handleStorageChange);
     window.addEventListener('storage', handleStorageChange);
 
+    // 4. Window focus listener (reloads immediately when user switches tabs/windows)
+    const handleFocus = () => {
+      loadAllData();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    // 5. Periodic cloud poll fallback every 15 seconds
+    const interval = setInterval(() => {
+      loadAllData();
+    }, 15000);
+
     return () => {
+      unsubLogs();
+      unsubLists();
       window.removeEventListener('sar-storage-changed', handleStorageChange);
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
     };
   }, []);
 
