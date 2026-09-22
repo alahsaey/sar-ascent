@@ -1,0 +1,6 @@
+{
+  "name": "الخطوط الحديدية السعودية (سار) | بوابة التحقق من أمر إركاب الموظفين",
+  "description": "نظام التحقق من أمر إركاب الموظفين المعتمد لدى الشركة السعودية للخطوط الحديدية (سار)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

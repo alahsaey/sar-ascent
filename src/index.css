@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sar-navy: #002B49;
+  --color-sar-navy-dark: #001B2E;
+  --color-sar-navy-light: #003D66;
+  --color-sar-navy-50: #EDF4F9;
+  --color-sar-navy-100: #D7E7F2;
+
+  --color-sar-green: #008269;
+  --color-sar-green-hover: #006B56;
+  --color-sar-green-dark: #005443;
+  --color-sar-green-light: #00A383;
+  --color-sar-green-50: #E8F8F4;
+  --color-sar-green-100: #C3EFE5;
+
+  --color-sar-gold: #D0A85C;
+  --color-sar-gold-dark: #B28B3E;
+  --color-sar-gold-light: #E2C284;
+  --color-sar-gold-50: #FAF5EB;
+
+  --color-sar-red: #C8102E;
+  --color-sar-red-dark: #A30D25;
+  --color-sar-red-light: #FEE4E2;
+  --color-sar-red-50: #FEF3F2;
+
+  --color-sar-surface: #F4F7F9;
+  --color-sar-card: #FFFFFF;
+  --color-sar-border: #E2E8F0;
+
+  --font-sans: 'Tajawal', 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sar: 'Tajawal', 'IBM Plex Sans Arabic', sans-serif;
+  --font-display: 'Tajawal', sans-serif;
+}
+
+@layer base {
+  body {
+    font-family: 'Tajawal', 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--color-sar-surface, #F4F7F9);
+    color: var(--color-sar-navy, #002B49);
+  }
+}
+
+/* Custom SAR Brand UI Helper Classes */
+.sar-card-shadow {
+  box-shadow: 0 4px 20px -2px rgba(0, 43, 73, 0.08), 0 2px 6px -1px rgba(0, 43, 73, 0.04);
+}
+
+.sar-btn-primary {
+  background-color: #008269;
+  color: #FFFFFF;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sar-btn-primary:hover {
+  background-color: #006B56;
+}
+.sar-btn-primary:active {
+  transform: scale(0.99);
+}
+
+.sar-btn-navy {
+  background-color: #002B49;
+  color: #FFFFFF;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sar-btn-navy:hover {
+  background-color: #001B2E;
+}
+
+.sar-btn-gold {
+  background-color: #D0A85C;
+  color: #002B49;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sar-btn-gold:hover {
+  background-color: #B28B3E;
+  color: #FFFFFF;
+}
+
+

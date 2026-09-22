@@ -1,0 +1,73 @@
+{
+  "collections": [
+    {
+      "name": "admins",
+      "description": "System administrators and operators",
+      "fields": {
+        "id": "string",
+        "name": "string",
+        "email": "string",
+        "password_hash": "string",
+        "role": "string ('super_admin' | 'admin')",
+        "created_at": "string",
+        "updated_at": "string"
+      }
+    },
+    {
+      "name": "employee_lists",
+      "description": "Uploaded and approved employee travel lists",
+      "fields": {
+        "id": "string",
+        "file_name": "string",
+        "file_type": "string ('xlsx' | 'csv')",
+        "version_number": "number",
+        "title": "string",
+        "total_records": "number",
+        "status": "string ('uploaded' | 'validated' | 'approved' | 'active' | 'archived')",
+        "uploaded_by": "string",
+        "uploaded_at": "string",
+        "approved_by": "string",
+        "approved_at": "string",
+        "created_at": "string"
+      }
+    },
+    {
+      "name": "employees",
+      "description": "Authorized employees in travel lists",
+      "fields": {
+        "id": "string",
+        "employee_number": "string",
+        "list_id": "string",
+        "created_at": "string"
+      }
+    },
+    {
+      "name": "verification_logs",
+      "description": "Logs of all employee travel permit checks",
+      "fields": {
+        "id": "string",
+        "employee_number": "string",
+        "result": "string ('AUTHORIZED' | 'NOT_AUTHORIZED')",
+        "list_id": "string",
+        "list_title": "string",
+        "checked_at": "string",
+        "ip_address": "string",
+        "user_agent": "string"
+      }
+    },
+    {
+      "name": "audit_logs",
+      "description": "Audit trail of admin operations",
+      "fields": {
+        "id": "string",
+        "admin_id": "string",
+        "admin_name": "string",
+        "action": "string",
+        "entity_type": "string",
+        "entity_id": "string",
+        "details": "string",
+        "created_at": "string"
+      }
+    }
+  ]
+}

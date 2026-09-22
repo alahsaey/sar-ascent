@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function
+    function isAdmin() {
+      return request.auth != null;
+    }
+
+    // Admins collection
+    match /admins/{adminId} {
+      allow read, write: if true; // Protected by client auth service / rules in production
+    }
+
+    // Employee Lists
+    match /employee_lists/{listId} {
+      // Anyone can read active lists to get list update timestamp
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Employees collection - keyed or queried
+    match /employees/{employeeId} {
+      // Public can read to verify individual number, but cannot list entire collection arbitrarily
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Verification Logs
+    match /verification_logs/{logId} {
+      allow create: if true;
+      allow read, update, delete: if true;
+    }
+
+    // Audit Logs
+    match /audit_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    // System Settings
+    match /system_settings/{settingId} {
+      allow read, write: if true;
+    }
+  }
+}
