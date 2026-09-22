@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
   FileSpreadsheet,
@@ -46,6 +46,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
   const [activeTab, setActiveTab] = useState<'dashboard' | 'lists' | 'logs' | 'audit' | 'admins'>('dashboard');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const isInitialMount = useRef(true);
 
   // Data states
   const [stats, setStats] = useState<{
@@ -73,8 +74,11 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
 
-  const loadAllData = async () => {
-    setLoading(true);
+  const loadAllData = async (isSilent = false) => {
+    // Only show full loading spinner on initial mount so views and filters are never interrupted
+    if (!isSilent && isInitialMount.current) {
+      setLoading(true);
+    }
     try {
       const [dashStats, allLists, allLogs, allAudit, allAdmins] = await Promise.all([
         getDashboardStats(),
@@ -93,42 +97,43 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
       console.error('Error loading admin data:', err);
     } finally {
       setLoading(false);
+      isInitialMount.current = false;
     }
   };
 
   useEffect(() => {
     loadAllData();
 
-    // 1. Real-time Firestore logs listener (instant multi-device sync)
+    // 1. Real-time Firestore logs listener (instant multi-device sync without tearing down UI)
     const unsubLogs = subscribeToVerificationLogs((newLogs) => {
       setLogs(newLogs);
       getDashboardStats().then((s) => setStats(s)).catch(() => {});
     });
 
-    // 2. Real-time Firestore lists listener (instant list updates)
+    // 2. Real-time Firestore lists listener (instant list updates without tearing down UI)
     const unsubLists = subscribeToEmployeeLists((newLists) => {
       setLists(newLists);
       getDashboardStats().then((s) => setStats(s)).catch(() => {});
     });
 
-    // 3. Storage and broadcast listeners for same-browser windows
+    // 3. Storage and broadcast listeners for same-browser windows (silent update)
     const handleStorageChange = () => {
-      loadAllData();
+      loadAllData(true);
     };
 
     window.addEventListener('sar-storage-changed', handleStorageChange);
     window.addEventListener('storage', handleStorageChange);
 
-    // 4. Window focus listener (reloads immediately when user switches tabs/windows)
+    // 4. Window focus listener (reloads silently in the background)
     const handleFocus = () => {
-      loadAllData();
+      loadAllData(true);
     };
     window.addEventListener('focus', handleFocus);
 
-    // 5. Periodic cloud poll fallback every 15 seconds
+    // 5. Periodic cloud poll fallback every 45 seconds (silent)
     const interval = setInterval(() => {
-      loadAllData();
-    }, 15000);
+      loadAllData(true);
+    }, 45000);
 
     return () => {
       unsubLogs();
@@ -295,7 +300,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
               <ListsManagement
                 lists={lists}
                 onOpenUpload={() => setIsUploadModalOpen(true)}
-                onRefresh={loadAllData}
+                onRefresh={() => loadAllData(true)}
                 currentAdmin={currentAdmin}
               />
             )}
@@ -303,7 +308,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
             {activeTab === 'logs' && (
               <VerificationLogsView
                 logs={logs}
-                onRefresh={loadAllData}
+                onRefresh={() => loadAllData(true)}
               />
             )}
 
@@ -314,7 +319,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
             {activeTab === 'admins' && (
               <AdminUsersView
                 admins={adminUsers}
-                onRefresh={loadAllData}
+                onRefresh={() => loadAllData(true)}
                 currentAdmin={currentAdmin}
               />
             )}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Clock,
   Search,
@@ -16,7 +16,11 @@ import {
   Database,
   Calendar,
   X,
-  Sparkles
+  Sparkles,
+  PauseCircle,
+  PlayCircle,
+  Pause,
+  Play
 } from 'lucide-react';
 import { VerificationLog } from '../../types';
 import {
@@ -38,37 +42,129 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
   logs,
   onRefresh,
 }) => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [resultFilter, setResultFilter] = useState<'ALL' | 'AUTHORIZED' | 'NOT_AUTHORIZED'>('ALL');
-  const [dateFilter, setDateFilter] = useState('');
+  const todayStr = useMemo(() => getTodayISODate(), []);
+  const yesterdayStr = useMemo(() => getYesterdayISODate(), []);
+
+  // Auto-refresh control state: toggle to pause/resume live background synchronization
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => {
+    try {
+      const stored = sessionStorage.getItem('sar_logs_auto_sync');
+      return stored !== null ? stored === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  // Frozen snapshot of logs when auto-refresh is paused
+  const [frozenLogs, setFrozenLogs] = useState<VerificationLog[]>(logs);
+
+  // When auto-sync is active, keep frozenLogs updated to the incoming logs
+  useEffect(() => {
+    if (autoSyncEnabled) {
+      setFrozenLogs(logs);
+    }
+  }, [logs, autoSyncEnabled]);
+
+  const handleToggleAutoSync = () => {
+    const nextState = !autoSyncEnabled;
+    setAutoSyncEnabled(nextState);
+    try {
+      sessionStorage.setItem('sar_logs_auto_sync', String(nextState));
+    } catch {}
+    if (nextState) {
+      // Re-synchronize immediately when unpaused
+      setFrozenLogs(logs);
+    }
+  };
+
+  const handleApplyPendingLogs = () => {
+    setFrozenLogs(logs);
+  };
+
+  // The logs actually rendered in the UI: frozenLogs when paused, logs when active
+  const activeDisplayLogs = autoSyncEnabled ? logs : frozenLogs;
+
+  // Calculate new pending logs that arrived while auto-refresh was paused
+  const pendingNewLogsCount = useMemo(() => {
+    if (autoSyncEnabled) return 0;
+    const frozenIds = new Set(frozenLogs.map((l) => l.id));
+    return logs.filter((l) => !frozenIds.has(l.id)).length;
+  }, [logs, frozenLogs, autoSyncEnabled]);
+
+  const [searchTerm, setSearchTerm] = useState(() => {
+    try {
+      return sessionStorage.getItem('sar_logs_search') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [resultFilter, setResultFilter] = useState<'ALL' | 'AUTHORIZED' | 'NOT_AUTHORIZED'>(() => {
+    try {
+      return (sessionStorage.getItem('sar_logs_result_filter') as any) || 'ALL';
+    } catch {
+      return 'ALL';
+    }
+  });
+
+  const [dateFilter, setDateFilter] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem('sar_logs_date_filter') || '';
+    } catch {
+      return '';
+    }
+  });
+
   const [isMigrating, setIsMigrating] = useState(false);
   const [migrationStatus, setMigrationStatus] = useState<{
     type: 'idle' | 'success' | 'error';
     message?: string;
   }>({ type: 'idle' });
 
-  const todayStr = useMemo(() => getTodayISODate(), []);
-  const yesterdayStr = useMemo(() => getYesterdayISODate(), []);
+  const handleSetSearchTerm = (val: string) => {
+    setSearchTerm(val);
+    try {
+      sessionStorage.setItem('sar_logs_search', val);
+    } catch {}
+  };
 
-  // Quick stats
+  const handleSetResultFilter = (val: 'ALL' | 'AUTHORIZED' | 'NOT_AUTHORIZED') => {
+    setResultFilter(val);
+    try {
+      sessionStorage.setItem('sar_logs_result_filter', val);
+    } catch {}
+  };
+
+  const handleSetDateFilter = (val: string) => {
+    setDateFilter(val);
+    try {
+      if (val) {
+        sessionStorage.setItem('sar_logs_date_filter', val);
+      } else {
+        sessionStorage.removeItem('sar_logs_date_filter');
+      }
+    } catch {}
+  };
+
+  // Quick stats computed against activeDisplayLogs
   const todayCount = useMemo(() => {
-    return logs.filter((l) => isMatchingFilterDate(l.checkedAt, todayStr)).length;
-  }, [logs, todayStr]);
+    return activeDisplayLogs.filter((l) => isMatchingFilterDate(l.checkedAt, todayStr)).length;
+  }, [activeDisplayLogs, todayStr]);
 
   const yesterdayCount = useMemo(() => {
-    return logs.filter((l) => isMatchingFilterDate(l.checkedAt, yesterdayStr)).length;
-  }, [logs, yesterdayStr]);
+    return activeDisplayLogs.filter((l) => isMatchingFilterDate(l.checkedAt, yesterdayStr)).length;
+  }, [activeDisplayLogs, yesterdayStr]);
 
   // Robust timezone-aware filter
   const filteredLogs = useMemo(() => {
-    return logs.filter((log) => {
+    return activeDisplayLogs.filter((log) => {
       const q = searchTerm.trim();
       const matchesSearch = !q || (log.employeeNumber && log.employeeNumber.includes(q)) || (log.employeeName && log.employeeName.includes(q));
       const matchesResult = resultFilter === 'ALL' || log.result === resultFilter;
       const matchesDate = !dateFilter || isMatchingFilterDate(log.checkedAt, dateFilter);
       return matchesSearch && matchesResult && matchesDate;
     });
-  }, [logs, searchTerm, resultFilter, dateFilter]);
+  }, [activeDisplayLogs, searchTerm, resultFilter, dateFilter]);
 
   const handleManualMigration = async () => {
     setIsMigrating(true);
@@ -98,9 +194,9 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
   };
 
   const resetFilters = () => {
-    setSearchTerm('');
-    setResultFilter('ALL');
-    setDateFilter('');
+    handleSetSearchTerm('');
+    handleSetResultFilter('ALL');
+    handleSetDateFilter('');
   };
 
   const isFilterActive = searchTerm !== '' || resultFilter !== 'ALL' || dateFilter !== '';
@@ -125,24 +221,64 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header and Export */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Header and Controls */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-black text-[#002B49] flex items-center gap-2">
             <Clock className="w-6 h-6 text-[#008269]" />
             <span>سجل عمليات التحقق من أوامر إركاب الموظفين</span>
           </h2>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-            سجل تدقيق مركزي موحد لجميع محاولات التحقق متزامن لحظياً وفورياً مع السحابة وكافة أجهزة المحطات.
+            سجل تدقيق مركزي موحد لجميع محاولات التحقق، مع إمكانية إيقاف التحديث التلقائي لتسهيل التدقيق والفحص دون مقاطعة.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
+          {/* Live Auto-Sync Toggle Switch */}
+          <div className="inline-flex items-center gap-2.5 bg-white px-3 py-2 rounded-xl border border-slate-300 shadow-2xs">
+            <div className="flex items-center gap-2 text-xs font-bold">
+              {autoSyncEnabled ? (
+                <>
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#008269]" />
+                  </span>
+                  <span className="text-[#008269]">تحديث تلقائي: نشط</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                  <span className="text-amber-700">تحديث تلقائي: متوقف</span>
+                </>
+              )}
+            </div>
+
+            {/* Toggle Button */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoSyncEnabled}
+              onClick={handleToggleAutoSync}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#008269]/40 ${
+                autoSyncEnabled ? 'bg-[#008269]' : 'bg-slate-300'
+              }`}
+              title={autoSyncEnabled ? 'اضغط لإيقاف التحديث التلقائي وتثبيت السجلات للمراجعة الهادئة' : 'اضغط لتفعيل التحديث التلقائي المباشر'}
+            >
+              <span
+                aria-hidden="true"
+                className="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out"
+                style={{
+                  transform: autoSyncEnabled ? 'translateX(-20px)' : 'translateX(0px)',
+                }}
+              />
+            </button>
+          </div>
+
           {/* Cloud Migration Button */}
           <button
             onClick={handleManualMigration}
             disabled={isMigrating}
-            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition-all shadow-2xs cursor-pointer disabled:opacity-50"
             title="ترحيل ومزامنة كافة السجلات المحلية من المتصفح إلى السحابة المركزية"
           >
             {isMigrating ? (
@@ -150,26 +286,63 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
             ) : (
               <CloudUpload className="w-4 h-4 text-emerald-600" />
             )}
-            <span>{isMigrating ? 'جاري الترحيل...' : 'ترحيل ومزامنة السحابة'}</span>
+            <span>{isMigrating ? 'جاري الترحيل...' : 'ترحيل ومزامنة'}</span>
           </button>
 
           <button
-            onClick={onRefresh}
-            className="p-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-[#002B49] transition-colors cursor-pointer"
-            title="تحديث البيانات السحابية"
+            onClick={() => {
+              onRefresh();
+              handleApplyPendingLogs();
+            }}
+            className="p-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-[#002B49] transition-colors cursor-pointer bg-white"
+            title="تحديث البيانات السحابية يدوياً"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
 
           <button
             onClick={handleExport}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#002B49] hover:bg-[#001B2E] text-white text-xs font-bold transition-all shadow-xs cursor-pointer border border-[#002B49]"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#002B49] hover:bg-[#001B2E] text-white text-xs font-bold transition-all shadow-xs cursor-pointer border border-[#002B49]"
           >
             <Download className="w-4 h-4 text-[#D0A85C]" />
-            <span>تصدير السجل إلى Excel</span>
+            <span>تصدير Excel</span>
           </button>
         </div>
       </div>
+
+      {/* Pending New Logs Banner (when Auto-Sync is paused) */}
+      {!autoSyncEnabled && pendingNewLogsCount > 0 && (
+        <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-900 shadow-xs animate-fadeIn">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+              <PauseCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-black text-amber-950">التحديث التلقائي متوقف مؤقتاً لتسهيل الفحص والتدقيق</div>
+              <p className="text-amber-800 text-[11px] mt-0.5">
+                تم تسجيل <strong className="font-bold font-mono text-amber-950 px-1 bg-amber-200/70 rounded">{pendingNewLogsCount}</strong> سجل جديد في السحابة أثناء فترة التوقف. السجلات المعروضة حالياً ثابتة.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              onClick={handleApplyPendingLogs}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>عرض السجلات الجديدة الآن</span>
+            </button>
+            <button
+              onClick={handleToggleAutoSync}
+              className="px-3.5 py-1.5 rounded-xl bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Play className="w-3 h-3 text-[#008269]" />
+              <span>استئناف التحديث التلقائي</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Cloud Status Notice */}
       {migrationStatus.type !== 'idle' && (
@@ -206,10 +379,17 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-black text-[#002B49]">قاعدة البيانات السحابية المركزية (Firestore)</span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
-                مزامنة حية وموحدة
-              </span>
+              {autoSyncEnabled ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                  مزامنة حية ومباشرة
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
+                  التحديث المباشر متوقف مؤقتاً
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-500 mt-0.5">
               يتم حفظ واسترجاع جميع استعلامات أوامر الإركاب تلقائياً عبر السحابة لضمان عرض تقرير تدقيق دقيق وشامل لكافة التواريخ.
@@ -236,7 +416,7 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
 
         {/* All Dates */}
         <button
-          onClick={() => setDateFilter('')}
+          onClick={() => handleSetDateFilter('')}
           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             dateFilter === ''
               ? 'bg-[#002B49] text-white shadow-2xs'
@@ -248,7 +428,7 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
 
         {/* Today */}
         <button
-          onClick={() => setDateFilter(todayStr)}
+          onClick={() => handleSetDateFilter(todayStr)}
           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
             dateFilter === todayStr
               ? 'bg-[#008269] text-white shadow-2xs'
@@ -265,7 +445,7 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
 
         {/* Yesterday */}
         <button
-          onClick={() => setDateFilter(yesterdayStr)}
+          onClick={() => handleSetDateFilter(yesterdayStr)}
           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
             dateFilter === yesterdayStr
               ? 'bg-[#008269] text-white shadow-2xs'
@@ -299,7 +479,7 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
           <input
             type="text"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => handleSetSearchTerm(e.target.value)}
             placeholder="البحث بالرقم الوظيفي أو الاسم..."
             className="w-full h-10 px-3 pr-9 text-xs bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] font-mono"
           />
@@ -310,7 +490,7 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
         <div>
           <select
             value={resultFilter}
-            onChange={(e) => setResultFilter(e.target.value as any)}
+            onChange={(e) => handleSetResultFilter(e.target.value as any)}
             className="w-full h-10 px-3 text-xs bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] font-medium text-slate-700 cursor-pointer"
           >
             <option value="ALL">جميع نتائج التحقق (الكل)</option>
@@ -324,12 +504,12 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
           <input
             type="date"
             value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
+            onChange={(e) => handleSetDateFilter(e.target.value)}
             className="w-full h-10 px-3 text-xs bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] font-mono text-slate-700 cursor-pointer"
           />
           {dateFilter && (
             <button
-              onClick={() => setDateFilter('')}
+              onClick={() => handleSetDateFilter('')}
               className="absolute left-3 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               title="إلغاء تصفية التاريخ"
             >

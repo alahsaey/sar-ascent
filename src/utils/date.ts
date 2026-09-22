@@ -149,13 +149,29 @@ export function getRiyadhISODate(dateInput: string | Date | undefined | null): s
     const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
     if (isNaN(date.getTime())) return '';
 
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Riyadh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const parts = formatter.formatToParts(date);
+      const year = parts.find(p => p.type === 'year')?.value;
+      const month = parts.find(p => p.type === 'month')?.value;
+      const day = parts.find(p => p.type === 'day')?.value;
+      if (year && month && day) {
+        return `${year}-${month}-${day}`;
+      }
+    } catch {}
+
     const formatter = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Riyadh',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit'
     });
-    return formatter.format(date);
+    return formatter.format(date).trim();
   } catch {
     return getLocalISODate(dateInput);
   }
@@ -188,13 +204,25 @@ export function isMatchingFilterDate(dateInput: string | Date | undefined | null
   const targetDate = filterDate.trim();
   if (!targetDate) return true;
 
+  const riyadhToday = getRiyadhISODate(new Date());
+  const localToday = getLocalISODate(new Date());
+
+  // If the user is filtering for "today" (either via today's date in Riyadh or locally)
+  if (targetDate === riyadhToday || targetDate === localToday) {
+    const rDate = getRiyadhISODate(dateInput);
+    const lDate = getLocalISODate(dateInput);
+    if (rDate === riyadhToday || rDate === localToday || lDate === riyadhToday || lDate === localToday) {
+      return true;
+    }
+  }
+
   const riyadhDate = getRiyadhISODate(dateInput);
   if (riyadhDate === targetDate) return true;
 
   const localDate = getLocalISODate(dateInput);
   if (localDate === targetDate) return true;
 
-  if (typeof dateInput === 'string' && dateInput.startsWith(targetDate)) {
+  if (typeof dateInput === 'string' && dateInput.trim().startsWith(targetDate)) {
     return true;
   }
 
