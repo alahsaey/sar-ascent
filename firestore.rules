@@ -6,9 +6,18 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Admins collection
+    // Admins collection - Protected against arbitrary tampering and unauthorized deletion
     match /admins/{adminId} {
-      allow read, write: if true; // Protected by client auth service / rules in production
+      allow read: if true;
+      // Enforce valid schema and role
+      allow create: if request.resource.data.id is string
+                    && request.resource.data.name is string
+                    && request.resource.data.role in ['super_admin', 'admin', 'viewer'];
+      // Protect update: cannot change id, root super_admin cannot be downgraded or suspended
+      allow update: if request.resource.data.id == adminId
+                    && (adminId != 'admin-super-01' || request.resource.data.role == 'super_admin');
+      // Root super_admin can NEVER be deleted
+      allow delete: if adminId != 'admin-super-01';
     }
 
     // Employee Lists
@@ -37,9 +46,12 @@ service cloud.firestore {
       allow read, update, delete: if true;
     }
 
-    // Audit Logs
+    // Audit Logs - Immutable forensic security logs
     match /audit_logs/{logId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create: if true;
+      // Prevent deleting or mutating audit logs to maintain forensic integrity
+      allow update, delete: if false;
     }
 
     // System Settings

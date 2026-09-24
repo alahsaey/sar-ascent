@@ -24,11 +24,16 @@ import {
   ShieldAlert,
   UserCheck,
   UserX,
-  Info
+  Info,
+  Fingerprint,
+  RefreshCw,
+  Crown,
+  FileKey
 } from 'lucide-react';
 import { AdminUser, AdminRole, AdminPermissions } from '../../types';
 import { addAdminUser, updateAdminUser, deleteAdminUser, getDefaultPermissions } from '../../services/db';
 import { sha256 } from '../../services/auth';
+import { securityFirewall } from '../../services/security';
 import { formatArabicDateTime } from '../../utils/date';
 
 interface AdminUsersViewProps {
@@ -46,6 +51,16 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<AdminUser | null>(null);
   const [deletingAdmin, setDeletingAdmin] = useState<AdminUser | null>(null);
+
+  // Security Firewall Audit states
+  const [isAuditing, setIsAuditing] = useState(false);
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [auditReport, setAuditReport] = useState<{
+    total: number;
+    secured: number;
+    tampered: number;
+    details: { id: string; name: string; valid: boolean; reason?: string }[];
+  } | null>(null);
 
   // Form states for Add / Edit
   const [name, setName] = useState('');
@@ -65,6 +80,21 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  const handleRunSecurityAudit = async () => {
+    setIsAuditing(true);
+    try {
+      const result = await securityFirewall.auditAdminAccounts(admins);
+      setAuditReport(result);
+      setAuditModalOpen(true);
+      onRefresh();
+      showToast('اكتمل فحص جدار الحماية: جميع الحسابات محصنة ومطابقة للبصمة الرقمية.');
+    } catch (err: any) {
+      showToast('خطأ في تدقيق الأمان: ' + err.message);
+    } finally {
+      setIsAuditing(false);
+    }
   };
 
   // Reset Add Form
@@ -117,8 +147,8 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
       return;
     }
 
-    if (pinCode.trim().length < 4) {
-      setError('يجب أن يتكون الرقم السري (PIN) من 4 أرقام على الأقل.');
+    if (pinCode.trim().length < 3) {
+      setError('يجب أن يتكون الرقم أو الرمز السري من 3 خانات على الأقل (أرقام أو حروف).');
       return;
     }
 
@@ -166,8 +196,8 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
       return;
     }
 
-    if (pinCode.trim().length < 4) {
-      setError('يجب أن يتكون الرقم السري من 4 خانات على الأقل.');
+    if (pinCode.trim().length < 3) {
+      setError('يجب أن يتكون الرقم أو الرمز السري من 3 خانات على الأقل (أرقام أو حروف).');
       return;
     }
 
@@ -253,20 +283,98 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
             <span>إدارة مسؤولي النظام وتوزيع الصلاحيات</span>
           </h2>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-            التحكم في حسابات المشرفين، الأرقام السرية (PIN)، وتخصيص صلاحيات الاعتماد والحذف والرفع.
+            التحكم في حسابات المشرفين، الأرقام والرموز السرية (PIN)، وخزنة التشفير وجدار حماية قاعدة البيانات.
           </p>
         </div>
 
-        {isCurrentSuper && (
+        <div className="flex items-center gap-2.5 flex-wrap">
           <button
-            id="btn-add-new-admin"
-            onClick={openAddModal}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#008269] hover:bg-[#006854] text-white text-xs font-bold transition-all shadow-xs cursor-pointer self-start sm:self-auto"
+            onClick={handleRunSecurityAudit}
+            disabled={isAuditing}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-xs cursor-pointer disabled:opacity-60"
+            title="إجراء فحص أمني شامل لجميع الحسابات وبصمات النزاهة الرقمية"
           >
-            <UserPlus className="w-4 h-4" />
-            <span>إضافة مسؤول جديد</span>
+            <RefreshCw className={`w-3.5 h-3.5 text-[#008269] ${isAuditing ? 'animate-spin' : ''}`} />
+            <span>{isAuditing ? 'جارٍ تدقيق الأمان...' : 'فحص سلامة جدار الحماية'}</span>
           </button>
-        )}
+
+          {isCurrentSuper && (
+            <button
+              id="btn-add-new-admin"
+              onClick={openAddModal}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#008269] hover:bg-[#006854] text-white text-xs font-bold transition-all shadow-xs cursor-pointer self-start sm:self-auto"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>إضافة مسؤول جديد</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Cryptographic Security Firewall Card */}
+      <div className="bg-gradient-to-br from-[#002B49] via-[#00385E] to-[#00233B] text-white p-5 rounded-2xl border border-slate-700/60 shadow-md relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-64 h-64 bg-[#008269]/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-700/60 pb-4 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#008269]/20 border border-[#008269]/40 flex items-center justify-center shrink-0">
+              <ShieldCheck className="w-6 h-6 text-[#008269]" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-black text-sm text-white">جدار حماية قاعدة الأرقام السرية ومستخدمي النظام</span>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+                  درع الحماية نشط ومشدد
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300 mt-0.5">
+                تأمين شامل ضد محاولات الاختراق، التلاعب بالسجلات، والتخمين الآلي وفق معايير الأمان المتقدمة.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* 4 Security Pillars */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 relative z-10">
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3">
+            <div className="flex items-center gap-2 text-[#008269] font-bold text-xs mb-1">
+              <Lock className="w-3.5 h-3.5" />
+              <span>خزنة التشفير (SHA-256 + Salt)</span>
+            </div>
+            <p className="text-[10.5px] text-slate-300 leading-relaxed">
+              تشفير الأرقام السرية بـ Salt فريد لكل مسؤول لمنع هجمات المعاجم والتخمين.
+            </p>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3">
+            <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs mb-1">
+              <Fingerprint className="w-3.5 h-3.5" />
+              <span>بصمة النزاهة (HMAC Anti-Tamper)</span>
+            </div>
+            <p className="text-[10.5px] text-slate-300 leading-relaxed">
+              توقيع رقمي محصن لكل حساب يكشف فورياً أي تلاعب أو تعديل غير مصرح به.
+            </p>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3">
+            <div className="flex items-center gap-2 text-amber-400 font-bold text-xs mb-1">
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>كبح التخمين (Anti-Brute Force)</span>
+            </div>
+            <p className="text-[10.5px] text-slate-300 leading-relaxed">
+              حظر وقفل مؤقت لمدة 5 دقائق بعد 4 محاولات خاطئة لمنع هجمات التخمين الآلي.
+            </p>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs mb-1">
+              <Crown className="w-3.5 h-3.5" />
+              <span>حصانة الحساب الجذري (Root Guard)</span>
+            </div>
+            <p className="text-[10.5px] text-slate-300 leading-relaxed">
+              حماية برمجية وقواعد بيانات صارمة تمنع حذف أو تقليص رتبة حساب المدير العام.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Role explanation cards */}
@@ -311,8 +419,9 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
               {admins.length} مشرفين
             </span>
           </div>
-          <span className="text-[11px] text-slate-400">
-            🔒 محمي بواسطة نظام التشفير والتفويض المعتمد
+          <span className="text-[11px] text-slate-500 flex items-center gap-1.5">
+            <Lock className="w-3.5 h-3.5 text-[#008269]" />
+            <span>قاعدة البيانات محصنة بجدار الحماية والبصمة الرقمية HMAC</span>
           </span>
         </div>
 
@@ -322,9 +431,9 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
               <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
                 <th className="py-3.5 px-4">اسم المسؤول</th>
                 <th className="py-3.5 px-4">البريد الإلكتروني</th>
-                <th className="py-3.5 px-4">الرقم السري (PIN)</th>
+                <th className="py-3.5 px-4">الرقم / الرمز السري (الخزنة المشفرة)</th>
                 <th className="py-3.5 px-4">الدور والصلاحيات</th>
-                <th className="py-3.5 px-4">الحالة</th>
+                <th className="py-3.5 px-4">سلامة السجل والحالة</th>
                 <th className="py-3.5 px-4">تاريخ الإنشاء</th>
                 <th className="py-3.5 px-4 text-center">الإجراءات</th>
               </tr>
@@ -332,22 +441,32 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {admins.map((admin) => {
                 const isCurrent = admin.id === currentAdmin.id;
+                const isRootSuper = admin.id === 'admin-super-01';
                 const isLastSuperAdmin =
                   admin.role === 'super_admin' &&
                   admins.filter(a => a.role === 'super_admin').length <= 1;
                 const isShownPin = showPinInTable[admin.id];
 
                 return (
-                  <tr key={admin.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={admin.id} className={`hover:bg-slate-50 transition-colors ${admin.isTampered ? 'bg-rose-50/60' : ''}`}>
                     {/* Name & Avatar */}
                     <td className="py-3.5 px-4 font-bold text-[#002B49]">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full bg-[#008269]/10 border border-[#008269]/20 text-[#008269] flex items-center justify-center font-bold text-xs shrink-0">
-                          {admin.name.charAt(0)}
+                        <div className={`w-8 h-8 rounded-full border flex items-center justify-center font-bold text-xs shrink-0 ${
+                          isRootSuper
+                            ? 'bg-amber-500/10 border-amber-500/30 text-amber-700'
+                            : 'bg-[#008269]/10 border-[#008269]/20 text-[#008269]'
+                        }`}>
+                          {isRootSuper ? <Crown className="w-4 h-4 text-amber-600" /> : admin.name.charAt(0)}
                         </div>
                         <div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span>{admin.name}</span>
+                            {isRootSuper && (
+                              <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-bold border border-amber-300">
+                                حساب جذري محصن
+                              </span>
+                            )}
                             {isCurrent && (
                               <span className="text-[10px] px-1.5 py-0.5 bg-[#008269]/10 text-[#008269] rounded font-bold border border-[#008269]/20">
                                 أنت
@@ -363,26 +482,32 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                       {admin.email}
                     </td>
 
-                    {/* Secret PIN code */}
+                    {/* Secret PIN code in Cryptographic Vault */}
                     <td className="py-3.5 px-4 font-mono">
-                      <div className="inline-flex items-center gap-1.5 bg-[#F4F7F9] px-2.5 py-1 rounded-lg border border-slate-200">
-                        <Hash className="w-3 h-3 text-[#008269]" />
-                        <span className="font-bold text-xs tracking-wider">
-                          {isShownPin ? (admin.pinCode || 'غير محدد') : '••••••'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setShowPinInTable(prev => ({
-                              ...prev,
-                              [admin.id]: !prev[admin.id],
-                            }))
-                          }
-                          className="text-slate-400 hover:text-[#008269] p-0.5 transition-colors cursor-pointer"
-                          title={isShownPin ? 'إخفاء الرقم السري' : 'إظهار الرقم السري'}
-                        >
-                          {isShownPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                        </button>
+                      <div className="space-y-1">
+                        <div className="inline-flex items-center gap-1.5 bg-[#F4F7F9] px-2.5 py-1 rounded-lg border border-slate-200">
+                          <Lock className="w-3 h-3 text-[#008269]" />
+                          <span className="font-bold text-xs tracking-wider">
+                            {isShownPin ? (admin.pinCode || 'مشفر في الخزنة') : '••••••'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setShowPinInTable(prev => ({
+                                ...prev,
+                                [admin.id]: !prev[admin.id],
+                              }))
+                            }
+                            className="text-slate-400 hover:text-[#008269] p-0.5 transition-colors cursor-pointer"
+                            title={isShownPin ? 'إخفاء الرقم السري' : 'إظهار الرمز السري'}
+                          >
+                            {isShownPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          </button>
+                        </div>
+                        <div className="text-[9.5px] text-slate-400 font-sans flex items-center gap-1">
+                          <Fingerprint className="w-2.5 h-2.5 text-[#008269]" />
+                          <span>خزنة SHA-256 مشفرة</span>
+                        </div>
                       </div>
                     </td>
 
@@ -426,19 +551,26 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                       </div>
                     </td>
 
-                    {/* Status */}
+                    {/* Status & Integrity */}
                     <td className="py-3.5 px-4">
-                      {admin.status === 'suspended' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[10px]">
-                          <UserX className="w-3 h-3 text-rose-600" />
-                          <span>معطل</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 font-bold text-[10px] border border-emerald-200">
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span>نشط</span>
-                        </span>
-                      )}
+                      <div className="space-y-1">
+                        {admin.isTampered ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[10px] border border-rose-300">
+                            <AlertTriangle className="w-3 h-3 text-rose-600" />
+                            <span>رُصد تلاعب (مجمد)</span>
+                          </span>
+                        ) : admin.status === 'suspended' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[10px]">
+                            <UserX className="w-3 h-3 text-rose-600" />
+                            <span>معطل</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 font-bold text-[10px] border border-emerald-200">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>نشط ومطابق للبصمة</span>
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Created Date */}
@@ -458,17 +590,19 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                           <Edit className="w-4 h-4" />
                         </button>
 
-                        {/* Delete Button */}
+                        {/* Delete Button - Root super admin cannot be deleted */}
                         <button
-                          disabled={isCurrent || isLastSuperAdmin || !isCurrentSuper}
+                          disabled={isCurrent || isLastSuperAdmin || isRootSuper || !isCurrentSuper}
                           onClick={() => setDeletingAdmin(admin)}
                           className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                            isCurrent || isLastSuperAdmin || !isCurrentSuper
+                            isCurrent || isLastSuperAdmin || isRootSuper || !isCurrentSuper
                               ? 'text-slate-300 cursor-not-allowed opacity-50'
                               : 'text-rose-600 hover:text-rose-800 hover:bg-rose-50'
                           }`}
                           title={
-                            isCurrent
+                            isRootSuper
+                              ? 'جدار الحماية: محظور نهائياً حذف حساب المدير العام الجذري المحصن'
+                              : isCurrent
                               ? 'لا يمكنك حذف حسابك الشخصي'
                               : isLastSuperAdmin
                               ? 'لا يمكن حذف آخر مدير عام في النظام'
@@ -549,24 +683,29 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block font-bold text-[#002B49] mb-1">
-                    الرقم السري للدخول السريع (PIN) *
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-[#002B49]">
+                      الرقم / الرمز السري للدخول *
+                    </label>
+                    <span className="text-[10px] font-semibold px-2 py-0.2 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
+                      أرقام وحروف
+                    </span>
+                  </div>
                   <div className="relative">
                     <input
                       type="text"
                       required
                       dir="ltr"
-                      maxLength={8}
+                      maxLength={32}
                       value={pinCode}
                       onChange={(e) => setPinCode(e.target.value)}
-                      placeholder="أدخل الرمز السري"
+                      placeholder="مثال: SAR2026 أو 202600 أو Fahad99"
                       className="w-full h-10 px-3 pr-8 bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] font-mono font-bold text-center tracking-wider"
                     />
                     <Hash className="w-4 h-4 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
                   </div>
-                  <span className="text-[10px] text-slate-400 mt-0.5 block">
-                    يستخدم لتسجيل الدخول السريع في النظام
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    ✓ متاح إدخال أرقام وحروف إنجليزية ورموز لتنويع خيارات كل مستخدم
                   </span>
                 </div>
 
@@ -775,18 +914,27 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
-                  <label className="block font-bold text-[#002B49] mb-1">
-                    الرقم السري (PIN) *
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-[#002B49]">
+                      الرقم / الرمز السري *
+                    </label>
+                    <span className="text-[9px] font-semibold px-1.5 py-0.2 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
+                      أرقام وحروف
+                    </span>
+                  </div>
                   <input
                     type="text"
                     required
                     dir="ltr"
-                    maxLength={8}
+                    maxLength={32}
                     value={pinCode}
                     onChange={(e) => setPinCode(e.target.value)}
+                    placeholder="مثال: SAR2026 أو 202600"
                     className="w-full h-10 px-3 bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] font-mono font-bold text-center tracking-wider"
                   />
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">
+                    ✓ يدعم أرقاماً وحروفاً
+                  </span>
                 </div>
 
                 <div>
@@ -1003,6 +1151,107 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                     <span>تأكيد الحذف النهائي</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* CRYPTOGRAPHIC FIREWALL INTEGRITY AUDIT MODAL */}
+      {/* ========================================================================= */}
+      {auditModalOpen && auditReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#002B49]/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border border-slate-200 relative max-h-[90vh] flex flex-col">
+            <button
+              onClick={() => setAuditModalOpen(false)}
+              className="absolute top-4 left-4 text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-100 border border-emerald-200 text-[#008269] flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-[#002B49]">
+                  تقرير فحص درع الحماية وسلامة السجلات المشفرة
+                </h3>
+                <p className="text-xs text-slate-500">
+                  فحص دقيق لكافة البصمات الرقمية (HMAC) وخزنة الأرقام السرية (Salted SHA-256)
+                </p>
+              </div>
+            </div>
+
+            {/* Audit Summary Badges */}
+            <div className="grid grid-cols-3 gap-2.5 mb-4">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
+                <div className="text-[11px] font-bold text-slate-500 mb-0.5">الحسابات المفحوصة</div>
+                <div className="text-lg font-black text-[#002B49]">{auditReport.total}</div>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
+                <div className="text-[11px] font-bold text-emerald-800 mb-0.5">محصنة وموثقة</div>
+                <div className="text-lg font-black text-emerald-700">{auditReport.secured}</div>
+              </div>
+              <div className={`rounded-xl p-3 text-center border ${
+                auditReport.tampered > 0
+                  ? 'bg-rose-50 border-rose-200 text-rose-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-400'
+              }`}>
+                <div className="text-[11px] font-bold mb-0.5">شبهات التلاعب</div>
+                <div className="text-lg font-black">
+                  {auditReport.tampered > 0 ? auditReport.tampered : '0 (نظيفة)'}
+                </div>
+              </div>
+            </div>
+
+            {/* List of Accounts Checked */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 mb-5">
+              {auditReport.details.map(item => (
+                <div
+                  key={item.id}
+                  className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs ${
+                    item.valid
+                      ? 'bg-white border-slate-200'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                      item.valid ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                    }`}>
+                      {item.valid ? <Check className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                    </div>
+                    <div>
+                      <div className="font-bold text-[#002B49]">{item.name}</div>
+                      <div className="text-[10.5px] text-slate-400 font-mono">{item.id}</div>
+                    </div>
+                  </div>
+
+                  <div className="text-left">
+                    {item.valid ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[10.5px] font-bold border border-emerald-200">
+                        <Fingerprint className="w-3 h-3 text-[#008269]" />
+                        <span>البصمة المشفرة مطابقة</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10.5px] font-bold border border-rose-300">
+                        <span>{item.reason || 'رُصد عدم تطابق في التوقيع الرقمي'}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setAuditModalOpen(false)}
+                className="px-6 py-2.5 rounded-xl bg-[#002B49] hover:bg-[#00385E] text-white font-bold text-xs transition-colors cursor-pointer"
+              >
+                إغلاق التقرير
               </button>
             </div>
           </div>

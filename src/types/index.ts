@@ -68,7 +68,11 @@ export interface AdminUser {
   name: string;
   email: string;
   passwordHash: string;
-  pinCode?: string; // Secret PIN code for authorized administrators
+  pinCode?: string; // Secret PIN / passcode (alphanumeric, supporting both letters and numbers)
+  pinHash?: string; // SHA-256 salted hash of the PIN
+  pinSalt?: string; // Cryptographic salt unique to this administrator
+  integritySignature?: string; // Cryptographic signature guarding against database & local tampering
+  isTampered?: boolean; // Flagged if integrity signature does not match
   role: AdminRole;
   permissions: AdminPermissions;
   status: 'active' | 'suspended';

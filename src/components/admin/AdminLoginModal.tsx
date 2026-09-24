@@ -111,7 +111,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             }`}
           >
             <Hash className="w-3.5 h-3.5" />
-            <span>الدخول بالرقم السري (PIN)</span>
+            <span>الرمز السري (أرقام / حروف)</span>
           </button>
           <button
             type="button"
@@ -137,14 +137,19 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           </div>
         )}
 
-        {/* PIN LOGIN FORM */}
+        {/* PIN / ALPHANUMERIC CODE LOGIN FORM */}
         {loginMode === 'pin' ? (
           <form onSubmit={handleSubmitPin} className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-bold text-[#002B49]">
-                  الرقم السري للمسؤول (PIN Code)
-                </label>
+                <div className="flex items-center gap-1.5">
+                  <label className="block text-xs font-bold text-[#002B49]">
+                    الرمز أو الرقم السري للمسؤول
+                  </label>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    أرقام وحروف
+                  </span>
+                </div>
                 <button
                   type="button"
                   onClick={() => setShowPin(!showPin)}
@@ -160,16 +165,17 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                   required
                   autoFocus
                   dir="ltr"
-                  maxLength={10}
+                  maxLength={32}
                   value={pinCode}
                   onChange={(e) => setPinCode(e.target.value)}
-                  placeholder="أدخل الرقم السري المعتمد"
-                  className="w-full h-12 px-4 pr-11 text-center text-lg tracking-widest font-mono bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] transition-all"
+                  placeholder="أدخل الرمز السري (أرقام أو حروف)"
+                  className="w-full h-12 px-4 pr-11 text-center text-base sm:text-lg tracking-wider font-mono bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] transition-all"
                 />
                 <Hash className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
               </div>
-              <p className="text-[10px] text-slate-400 mt-1.5 text-right">
-                🔒 يتم التحقق فوريًا من صلاحيات المشرفين المعتمدين والمخولين من قبل إدارة النظام فقط.
+              <p className="text-[10px] text-slate-500 mt-1.5 text-right flex items-center gap-1">
+                <span>🔒</span>
+                <span>يقبل الرمز أرقاماً وحروفاً إنجليزية ورموزاً لتنويع خيارات كل مستخدم، ويتم التحقق المشفر فورياً.</span>
               </p>
             </div>
 

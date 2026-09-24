@@ -14,7 +14,12 @@ import {
   onSnapshot
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { securityFirewall } from './security';
+import {
+  securityFirewall,
+  secureAdminRecord,
+  verifyAdminIntegrity,
+  calculateAdminIntegrity
+} from './security';
 import { getTodayISODate, isMatchingFilterDate } from '../utils/date';
 import {
   EmployeeList,
@@ -1110,26 +1115,57 @@ export async function recordAuditLog(log: Omit<AuditLog, 'id'>): Promise<void> {
  * Admin Management
  */
 export async function getAdminUsers(): Promise<AdminUser[]> {
+  let loadedAdmins: AdminUser[] = [];
   const local = getLocal<AdminUser[]>(LOCAL_KEY_ADMINS, []);
   if (local && local.length > 0) {
-    return local;
+    loadedAdmins = local;
+  } else {
+    // Fallback to Firestore if local storage is empty
+    try {
+      const snap = await withTimeout(getDocs(collection(db, ADMINS_COLLECTION)), 1500);
+      if (!snap.empty) {
+        const remoteAdmins: AdminUser[] = [];
+        snap.forEach(d => remoteAdmins.push(d.data() as AdminUser));
+        if (remoteAdmins.length > 0) {
+          loadedAdmins = remoteAdmins;
+        }
+      }
+    } catch {}
+
+    if (loadedAdmins.length === 0) {
+      loadedAdmins = INITIAL_ADMINS;
+    }
   }
 
-  // Fallback to Firestore if local storage is empty
-  try {
-    const snap = await withTimeout(getDocs(collection(db, ADMINS_COLLECTION)), 1500);
-    if (!snap.empty) {
-      const remoteAdmins: AdminUser[] = [];
-      snap.forEach(d => remoteAdmins.push(d.data() as AdminUser));
-      if (remoteAdmins.length > 0) {
-        setLocal(LOCAL_KEY_ADMINS, remoteAdmins);
-        return remoteAdmins;
+  // Cryptographic Vault Audit & Migration: Ensure every admin is salted, hashed, and signed
+  let needsSync = false;
+  const verifiedAdmins: AdminUser[] = [];
+
+  for (const admin of loadedAdmins) {
+    let secured = { ...admin };
+
+    // Check if missing salt, pinHash, or integrity signature
+    if (!secured.pinHash || !secured.pinSalt || !secured.integritySignature) {
+      secured = await secureAdminRecord(secured);
+      needsSync = true;
+    } else {
+      // Verify anti-tamper signature
+      const integrity = await verifyAdminIntegrity(secured);
+      if (!integrity.valid) {
+        secured.isTampered = true;
+        secured.status = 'suspended'; // Automatically freeze tampered accounts
+        needsSync = true;
       }
     }
-  } catch {}
 
-  setLocal(LOCAL_KEY_ADMINS, INITIAL_ADMINS);
-  return INITIAL_ADMINS;
+    verifiedAdmins.push(secured);
+  }
+
+  if (needsSync) {
+    setLocal(LOCAL_KEY_ADMINS, verifiedAdmins);
+  }
+
+  return verifiedAdmins;
 }
 
 export async function addAdminUser(
@@ -1138,12 +1174,15 @@ export async function addAdminUser(
 ): Promise<AdminUser> {
   const id = 'admin-' + Date.now();
   const now = new Date().toISOString();
-  const newAdmin: AdminUser = {
+  let newAdmin: AdminUser = {
     ...user,
     id,
     createdAt: now,
     updatedAt: now
   };
+
+  // Cryptographically secure and sign the new account
+  newAdmin = await secureAdminRecord(newAdmin, user.pinCode);
 
   const admins = await getAdminUsers();
   admins.push(newAdmin);
@@ -1161,10 +1200,10 @@ export async function addAdminUser(
     await recordAuditLog({
       adminId: actingAdmin.id,
       adminName: actingAdmin.name,
-      action: 'إضافة مسؤول جديد',
+      action: 'إضافة مسؤول جديد (مشفر ومحصن)',
       entityType: 'ADMIN_USER',
       entityId: id,
-      details: `تم إنشاء حساب المشرف (${newAdmin.name} - ${newAdmin.email}) بدور (${newAdmin.role === 'super_admin' ? 'مدير عام' : newAdmin.role === 'admin' ? 'مسؤول تدقيق' : 'مشاهد'}).`,
+      details: `تم إنشاء حساب المشرف (${newAdmin.name} - ${newAdmin.email}) بدور (${newAdmin.role === 'super_admin' ? 'مدير عام' : newAdmin.role === 'admin' ? 'مسؤول تدقيق' : 'مشاهد'}) وتأمينه بتشفير SHA-256 وبصمة النزاهة الرقمية.`,
       createdAt: now
     });
   }
@@ -1177,6 +1216,16 @@ export async function updateAdminUser(
   updates: Partial<Omit<AdminUser, 'id' | 'createdAt'>>,
   actingAdmin?: { id: string; name: string }
 ): Promise<AdminUser> {
+  // Root Super Admin Immutability Firewall
+  if (id === 'admin-super-01') {
+    if (updates.role && updates.role !== 'super_admin') {
+      throw new Error('جدار الحماية: لا يمكن تقليص رتبة حساب المدير العام الجذري للنظام.');
+    }
+    if (updates.status === 'suspended') {
+      throw new Error('جدار الحماية: محظور تجميد أو تعطيل حساب المدير العام الجذري.');
+    }
+  }
+
   const admins = await getAdminUsers();
   const index = admins.findIndex(a => a.id === id);
 
@@ -1202,11 +1251,20 @@ export async function updateAdminUser(
   }
 
   const now = new Date().toISOString();
-  const updatedAdmin: AdminUser = {
+  let updatedAdmin: AdminUser = {
     ...existing,
     ...updates,
     updatedAt: now,
   };
+
+  // If PIN or credentials or permissions changed, re-secure and re-sign the record
+  if (updates.pinCode || updates.role || updates.permissions || updates.status) {
+    updatedAdmin = await secureAdminRecord(updatedAdmin, updates.pinCode);
+  } else {
+    // Refresh integrity signature
+    updatedAdmin.integritySignature = await calculateAdminIntegrity(updatedAdmin);
+    updatedAdmin.isTampered = false;
+  }
 
   admins[index] = updatedAdmin;
   setLocal(LOCAL_KEY_ADMINS, admins);
@@ -1226,7 +1284,7 @@ export async function updateAdminUser(
       action: 'تعديل بيانات وصلاحيات مسؤول',
       entityType: 'ADMIN_USER',
       entityId: id,
-      details: `تم تحديث بيانات وصلاحيات المشرف (${updatedAdmin.name} - ${updatedAdmin.email}).`,
+      details: `تم تحديث بيانات وصلاحيات المشرف (${updatedAdmin.name} - ${updatedAdmin.email}) وتجديد البصمة الرقمية المشفرة.`,
       createdAt: now
     });
   }
@@ -1238,6 +1296,11 @@ export async function deleteAdminUser(
   adminIdToDelete: string,
   actingAdmin: { id: string; name: string }
 ): Promise<void> {
+  // Root Super Admin Immortality Protection
+  if (adminIdToDelete === 'admin-super-01') {
+    throw new Error('جدار الحماية: محظور نهائياً حذف حساب المدير العام الجذري للنظام.');
+  }
+
   if (adminIdToDelete === actingAdmin.id) {
     throw new Error('لا يمكنك حذف حسابك الشخصي المسجل به حالياً.');
   }
@@ -1274,7 +1337,7 @@ export async function deleteAdminUser(
     action: 'حذف مسؤول من النظام',
     entityType: 'ADMIN_USER',
     entityId: adminIdToDelete,
-    details: `تم حذف المشرف (${targetAdmin.name} - ${targetAdmin.email}) ذو الدور (${targetAdmin.role}) نهائياً من النظام.`,
+    details: `تم حذف المشرف (${targetAdmin.name} - ${targetAdmin.email}) ذو الدور (${targetAdmin.role}) نهائياً من النظام بعد فحص ضوابط الأمان.`,
     createdAt: new Date().toISOString()
   });
 }
