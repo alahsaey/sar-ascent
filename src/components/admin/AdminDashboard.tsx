@@ -11,10 +11,15 @@ import {
   TrendingUp,
   FileUp,
   Download,
-  TrainTrack
+  TrainTrack,
+  Smartphone,
+  Tablet,
+  Monitor,
+  Globe
 } from 'lucide-react';
 import { EmployeeList, VerificationLog } from '../../types';
 import { formatArabicDateTime } from '../../utils/date';
+import { parseUserAgentString } from '../../utils/device';
 import { generateSampleExcelTemplate } from '../../services/excel';
 
 interface AdminDashboardProps {
@@ -254,45 +259,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <th className="py-3 px-3">النتيجة</th>
                 <th className="py-3 px-3">تاريخ ووقت التحقق</th>
                 <th className="py-3 px-3">القائمة المستخدمة</th>
+                <th className="py-3 px-3">الجهاز / المتصفح</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {recentLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                  <td colSpan={6} className="py-8 text-center text-slate-400 text-xs">
                     لا توجد عمليات استعلام مسجلة حتى الآن
                   </td>
                 </tr>
               ) : (
-                recentLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="py-3 px-3 font-mono font-bold text-[#002B49] text-sm dir-ltr text-right">
-                      {log.employeeNumber}
-                    </td>
-                    <td className="py-3 px-3 font-bold text-slate-800">
-                      {log.employeeName || '-'}
-                    </td>
-                    <td className="py-3 px-3">
-                      {log.result === 'AUTHORIZED' ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#008269]/15 text-[#008269] font-black text-[11px] border border-[#008269]/30">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-[#008269]" />
-                          <span>مصرح له الصعود بأمر إركاب</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-100 text-rose-900 font-bold text-[11px] border border-rose-300">
-                          <XCircle className="w-3.5 h-3.5 text-rose-700" />
-                          <span>ليس لديه أمر إركاب موظف</span>
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-slate-600 font-medium">
-                      {formatArabicDateTime(log.checkedAt)}
-                    </td>
-                    <td className="py-3 px-3 text-slate-500 text-xs">
-                      {log.listTitle}
-                    </td>
-                  </tr>
-                ))
+                recentLogs.map((log) => {
+                  const dev = parseUserAgentString(log.userAgent);
+                  const effectiveDevType = log.deviceType || dev.deviceType;
+                  const effectiveBrowser = log.browserName || dev.browserName;
+
+                  return (
+                    <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-3 font-mono font-bold text-[#002B49] text-sm dir-ltr text-right">
+                        {log.employeeNumber}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-slate-800">
+                        {log.employeeName || '-'}
+                      </td>
+                      <td className="py-3 px-3">
+                        {log.result === 'AUTHORIZED' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#008269]/15 text-[#008269] font-black text-[11px] border border-[#008269]/30">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[#008269]" />
+                            <span>مصرح له الصعود بأمر إركاب</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-100 text-rose-900 font-bold text-[11px] border border-rose-300">
+                            <XCircle className="w-3.5 h-3.5 text-rose-700" />
+                            <span>ليس لديه أمر إركاب موظف</span>
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-slate-600 font-medium">
+                        {formatArabicDateTime(log.checkedAt)}
+                      </td>
+                      <td className="py-3 px-3 text-slate-500 text-xs">
+                        {log.listTitle}
+                      </td>
+                      <td className="py-3 px-3">
+                        <div className="flex items-center gap-1.5" title={dev.summaryLabelAr}>
+                          {effectiveDevType === 'mobile' ? (
+                            <Smartphone className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          ) : effectiveDevType === 'tablet' ? (
+                            <Tablet className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                          ) : (
+                            <Monitor className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                          )}
+                          <span className="text-[11px] font-semibold text-slate-700">
+                            {effectiveBrowser}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

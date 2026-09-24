@@ -21,6 +21,7 @@ import {
   calculateAdminIntegrity
 } from './security';
 import { getTodayISODate, isMatchingFilterDate } from '../utils/date';
+import { detectClientEnvironment, parseUserAgentString } from '../utils/device';
 import {
   EmployeeList,
   VerificationLog,
@@ -32,6 +33,24 @@ import {
   ListStatus,
   ParsedEmployeeItem
 } from '../types';
+
+/**
+ * Recursively removes all `undefined` values from an object before passing to Firestore setDoc/updateDoc/writeBatch.
+ * Firestore strictly forbids `undefined` values and throws unhandled exceptions if present.
+ */
+export function cleanFirestoreData<T extends Record<string, any>>(obj: T): T {
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        cleaned[key] = cleanFirestoreData(value);
+      } else {
+        cleaned[key] = value;
+      }
+    }
+  }
+  return cleaned as T;
+}
 
 const LISTS_COLLECTION = 'employee_lists';
 const LISTS_DATA_COLLECTION = 'employee_lists_data';
@@ -415,9 +434,26 @@ export async function verifyEmployeeTravel(employeeNumberRaw: string): Promise<V
   }
 
   const employeeNumber = cleanInput;
+  const inquiryTime = new Date().toISOString();
+  const clientInfo = detectClientEnvironment();
 
   const activeLists = await getActiveEmployeeLists();
   if (activeLists.length === 0) {
+    // Record inquiry even if no active list exists so administrators see all queries from all devices!
+    await recordVerificationLog({
+      employeeNumber,
+      employeeName: 'غير مسجل (لا توجد قائمة نشطة)',
+      allowedRoute: 'لا توجد قائمة معتمدة',
+      result: 'NOT_AUTHORIZED',
+      listId: 'NONE',
+      listTitle: 'لا توجد قائمة معتمدة حالياً',
+      checkedAt: inquiryTime,
+      userAgent: clientInfo.fullUserAgent,
+      deviceType: clientInfo.deviceType,
+      browserName: clientInfo.browserName,
+      osName: clientInfo.osName,
+      deviceLabel: clientInfo.summaryLabelAr
+    }).catch(() => {});
     throw new Error('NO_ACTIVE_LIST');
   }
 
@@ -425,13 +461,12 @@ export async function verifyEmployeeTravel(employeeNumberRaw: string): Promise<V
   const isAuthorized = authorizedSet.has(employeeNumber);
   const details = isAuthorized ? activeEmployeesDetailsMap?.get(employeeNumber) : undefined;
 
-  const employeeName = details?.name;
-  const allowedRoute = details?.allowedRoute;
+  const employeeName = details?.name ? String(details.name).trim() : (isAuthorized ? 'موظف مصرح' : 'غير مسجل بقائمة الإركاب');
+  const allowedRoute = details?.allowedRoute ? String(details.allowedRoute).trim() : (isAuthorized ? 'كافة المسارات المعتمدة' : 'غير مصرح');
 
   // Find the matched list or fallback to the first active list
   const matchedList = (details?.listId ? activeLists.find(l => l.id === details.listId) : null) || activeLists[0];
   const lastUpdated = matchedList.approvedAt || matchedList.uploadedAt;
-  const inquiryTime = new Date().toISOString();
 
   const result: VerificationResult = {
     authorized: isAuthorized,
@@ -440,12 +475,12 @@ export async function verifyEmployeeTravel(employeeNumberRaw: string): Promise<V
     listTitle: matchedList.title,
     listVersion: matchedList.versionNumber,
     employeeNumber: employeeNumber,
-    employeeName: employeeName,
-    allowedRoute: allowedRoute,
+    employeeName: details?.name,
+    allowedRoute: details?.allowedRoute,
     checkedAt: inquiryTime,
   };
 
-  // Record in centralized Firestore verification logs reliably
+  // Record in centralized Firestore verification logs reliably across all browsers & devices
   try {
     await recordVerificationLog({
       employeeNumber,
@@ -455,7 +490,11 @@ export async function verifyEmployeeTravel(employeeNumberRaw: string): Promise<V
       listId: matchedList.id,
       listTitle: matchedList.title,
       checkedAt: inquiryTime,
-      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown'
+      userAgent: clientInfo.fullUserAgent,
+      deviceType: clientInfo.deviceType,
+      browserName: clientInfo.browserName,
+      osName: clientInfo.osName,
+      deviceLabel: clientInfo.summaryLabelAr
     });
   } catch (err) {
     console.error('Verification log recording error:', err);
@@ -466,12 +505,30 @@ export async function verifyEmployeeTravel(employeeNumberRaw: string): Promise<V
 
 /**
  * Records a verification log entry to both local cache and Firestore cloud database.
+ * Completely immune to undefined values and provides rich device tracking across all platforms.
  */
 export async function recordVerificationLog(log: Omit<VerificationLog, 'id'>): Promise<void> {
   const id = 'log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7);
-  const fullLog: VerificationLog = { ...log, id };
+  const clientInfo = parseUserAgentString(log.userAgent);
 
-  // 1. Local storage for immediate availability
+  const fullLog: VerificationLog = {
+    ...log,
+    id,
+    employeeNumber: String(log.employeeNumber || '').trim(),
+    employeeName: log.employeeName ? String(log.employeeName).trim() : 'غير مسجل بقائمة الإركاب',
+    allowedRoute: log.allowedRoute ? String(log.allowedRoute).trim() : 'غير مصرح',
+    result: log.result,
+    listId: log.listId || 'GENERAL',
+    listTitle: log.listTitle || 'القائمة المعتمدة',
+    checkedAt: log.checkedAt || new Date().toISOString(),
+    userAgent: log.userAgent || clientInfo.fullUserAgent,
+    deviceType: log.deviceType || clientInfo.deviceType,
+    browserName: log.browserName || clientInfo.browserName,
+    osName: log.osName || clientInfo.osName,
+    deviceLabel: log.deviceLabel || clientInfo.summaryLabelAr,
+  };
+
+  // 1. Local storage for immediate availability in the local browser
   try {
     const logs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
     const updated = [fullLog, ...logs.filter(l => l.id !== id)].slice(0, 2000);
@@ -480,11 +537,12 @@ export async function recordVerificationLog(log: Omit<VerificationLog, 'id'>): P
     console.error('Local log write error:', err);
   }
 
-  // 2. Direct write to central Firestore collection
+  // 2. Direct write to central Firestore collection (clean data ensures no undefined field rejects the write)
+  const firestoreCleanData = cleanFirestoreData(fullLog);
   try {
-    await setDoc(doc(db, LOGS_COLLECTION, id), fullLog);
+    await setDoc(doc(db, LOGS_COLLECTION, id), firestoreCleanData);
   } catch (err) {
-    console.error('Firestore log write error:', err);
+    console.warn('Firestore verification log write note:', err);
   }
 
   // 3. Instant local notification
@@ -848,14 +906,29 @@ export async function migrateLocalLogsToFirestore(): Promise<{
         const batch = writeBatch(db);
         chunk.forEach(log => {
           const logRef = doc(db, LOGS_COLLECTION, log.id);
-          batch.set(logRef, log);
+          const clientInfo = parseUserAgentString(log.userAgent);
+          const safeLog = cleanFirestoreData({
+            ...log,
+            employeeNumber: String(log.employeeNumber || '').trim(),
+            employeeName: log.employeeName ? String(log.employeeName).trim() : 'غير مسجل بقائمة الإركاب',
+            allowedRoute: log.allowedRoute ? String(log.allowedRoute).trim() : 'غير مصرح',
+            deviceType: log.deviceType || clientInfo.deviceType,
+            browserName: log.browserName || clientInfo.browserName,
+            osName: log.osName || clientInfo.osName,
+            deviceLabel: log.deviceLabel || clientInfo.summaryLabelAr,
+          });
+          batch.set(logRef, safeLog);
         });
         await batch.commit();
       }
     }
 
     const remoteLogs: VerificationLog[] = snap.docs.map(d => d.data() as VerificationLog);
-    const merged = remoteLogs.sort(
+    const logMap = new Map<string, VerificationLog>();
+    remoteLogs.forEach(l => { if (l && l.id) logMap.set(l.id, l); });
+    localLogs.forEach(l => { if (l && l.id && !logMap.has(l.id)) logMap.set(l.id, l); });
+
+    const merged = Array.from(logMap.values()).sort(
       (a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime()
     );
     setLocal(LOCAL_KEY_LOGS, merged.slice(0, 2000));
@@ -921,7 +994,7 @@ export async function clearVerificationLogs(adminName: string): Promise<void> {
 
 /**
  * Get Verification Logs with filtering and pagination
- * Relies on Firestore as authoritative source of truth, gracefully caching locally.
+ * Authoritatively pulls from Firestore and seamlessly merges with local storage.
  */
 export async function getVerificationLogs(options?: {
   employeeNumber?: string;
@@ -941,10 +1014,25 @@ export async function getVerificationLogs(options?: {
     );
     const snap = await getDocs(q);
     const remoteLogs = snap.docs.map(d => d.data() as VerificationLog);
-    allLogs = remoteLogs.sort(
+
+    // Merge remote logs with any local logs
+    const localLogs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
+    const logMap = new Map<string, VerificationLog>();
+    remoteLogs.forEach(l => { if (l && l.id) logMap.set(l.id, l); });
+    localLogs.forEach(l => { if (l && l.id && !logMap.has(l.id)) logMap.set(l.id, l); });
+
+    allLogs = Array.from(logMap.values()).sort(
       (a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime()
     );
     setLocal(LOCAL_KEY_LOGS, allLogs.slice(0, 2000));
+
+    // Auto-sync any local-only logs to Firestore in the background
+    const unpushedLogs = localLogs.filter(l => l && l.id && !remoteLogs.some(r => r.id === l.id));
+    if (unpushedLogs.length > 0) {
+      setTimeout(() => {
+        migrateLocalLogsToFirestore().catch(() => {});
+      }, 300);
+    }
   } catch (err) {
     console.warn('Firestore getVerificationLogs offline fallback:', err);
     allLogs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
@@ -1003,7 +1091,14 @@ export function subscribeToVerificationLogs(
       q,
       (snapshot) => {
         const remoteLogs = snapshot.docs.map(d => d.data() as VerificationLog);
-        const sorted = remoteLogs.sort(
+        
+        // Merge with local logs to prevent gaps
+        const localLogs = getLocal<VerificationLog[]>(LOCAL_KEY_LOGS, []);
+        const logMap = new Map<string, VerificationLog>();
+        remoteLogs.forEach(l => { if (l && l.id) logMap.set(l.id, l); });
+        localLogs.forEach(l => { if (l && l.id && !logMap.has(l.id)) logMap.set(l.id, l); });
+
+        const sorted = Array.from(logMap.values()).sort(
           (a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime()
         );
         setLocal(LOCAL_KEY_LOGS, sorted.slice(0, 2000));

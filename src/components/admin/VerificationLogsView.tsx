@@ -9,6 +9,10 @@ import {
   RefreshCw,
   FileSpreadsheet,
   Laptop,
+  Smartphone,
+  Tablet,
+  Monitor,
+  Globe,
   Cloud,
   CloudUpload,
   Check,
@@ -30,6 +34,7 @@ import {
   getTodayISODate,
   getYesterdayISODate
 } from '../../utils/date';
+import { parseUserAgentString } from '../../utils/device';
 import { migrateLocalLogsToFirestore } from '../../services/db';
 import * as XLSX from 'xlsx';
 
@@ -107,6 +112,14 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
     }
   });
 
+  const [deviceFilter, setDeviceFilter] = useState<'ALL' | 'desktop' | 'mobile' | 'tablet'>(() => {
+    try {
+      return (sessionStorage.getItem('sar_logs_device_filter') as any) || 'ALL';
+    } catch {
+      return 'ALL';
+    }
+  });
+
   const [dateFilter, setDateFilter] = useState<string>(() => {
     try {
       return sessionStorage.getItem('sar_logs_date_filter') || '';
@@ -135,6 +148,13 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
     } catch {}
   };
 
+  const handleSetDeviceFilter = (val: 'ALL' | 'desktop' | 'mobile' | 'tablet') => {
+    setDeviceFilter(val);
+    try {
+      sessionStorage.setItem('sar_logs_device_filter', val);
+    } catch {}
+  };
+
   const handleSetDateFilter = (val: string) => {
     setDateFilter(val);
     try {
@@ -155,16 +175,30 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
     return activeDisplayLogs.filter((l) => isMatchingFilterDate(l.checkedAt, yesterdayStr)).length;
   }, [activeDisplayLogs, yesterdayStr]);
 
-  // Robust timezone-aware filter
+  // Robust timezone-aware, device-aware, and keyword search
   const filteredLogs = useMemo(() => {
     return activeDisplayLogs.filter((log) => {
-      const q = searchTerm.trim();
-      const matchesSearch = !q || (log.employeeNumber && log.employeeNumber.includes(q)) || (log.employeeName && log.employeeName.includes(q));
+      const q = searchTerm.trim().toLowerCase();
+      const dev = parseUserAgentString(log.userAgent);
+      const effectiveDevType = log.deviceType || dev.deviceType;
+      const effectiveBrowser = log.browserName || dev.browserName;
+      const effectiveOS = log.osName || dev.osName;
+      const effectiveSummary = log.deviceLabel || dev.summaryLabelAr;
+
+      const matchesSearch = !q ||
+        (log.employeeNumber && log.employeeNumber.toLowerCase().includes(q)) ||
+        (log.employeeName && log.employeeName.toLowerCase().includes(q)) ||
+        effectiveBrowser.toLowerCase().includes(q) ||
+        effectiveOS.toLowerCase().includes(q) ||
+        effectiveSummary.toLowerCase().includes(q);
+
       const matchesResult = resultFilter === 'ALL' || log.result === resultFilter;
+      const matchesDevice = deviceFilter === 'ALL' || effectiveDevType === deviceFilter;
       const matchesDate = !dateFilter || isMatchingFilterDate(log.checkedAt, dateFilter);
-      return matchesSearch && matchesResult && matchesDate;
+
+      return matchesSearch && matchesResult && matchesDevice && matchesDate;
     });
-  }, [activeDisplayLogs, searchTerm, resultFilter, dateFilter]);
+  }, [activeDisplayLogs, searchTerm, resultFilter, deviceFilter, dateFilter]);
 
   const handleManualMigration = async () => {
     setIsMigrating(true);
@@ -196,22 +230,29 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
   const resetFilters = () => {
     handleSetSearchTerm('');
     handleSetResultFilter('ALL');
+    handleSetDeviceFilter('ALL');
     handleSetDateFilter('');
   };
 
-  const isFilterActive = searchTerm !== '' || resultFilter !== 'ALL' || dateFilter !== '';
+  const isFilterActive = searchTerm !== '' || resultFilter !== 'ALL' || deviceFilter !== 'ALL' || dateFilter !== '';
 
   const handleExport = () => {
-    const exportData = filteredLogs.map((l) => ({
-      'الرقم الوظيفي': l.employeeNumber,
-      'اسم الموظف': l.employeeName || 'غير محدد',
-      'جهة ومسار السفر': l.allowedRoute || 'كافة الخطوط',
-      'النتيجة': l.result === 'AUTHORIZED' ? 'مصرح له الصعود بأمر إركاب' : 'ليس لديه أمر إركاب موظف',
-      'تاريخ ووقت التحقق': formatArabicDateTimeWithSeconds(l.checkedAt),
-      'القائمة المستخدمة': l.listTitle,
-      'عنوان IP': l.ipAddress || 'محلي',
-      'معرف المتصفح / الجهاز': l.userAgent || 'مجهول',
-    }));
+    const exportData = filteredLogs.map((l) => {
+      const dev = parseUserAgentString(l.userAgent);
+      return {
+        'الرقم الوظيفي': l.employeeNumber,
+        'اسم الموظف': l.employeeName || 'غير محدد',
+        'جهة ومسار السفر': l.allowedRoute || 'كافة الخطوط',
+        'النتيجة': l.result === 'AUTHORIZED' ? 'مصرح له الصعود بأمر إركاب' : 'ليس لديه أمر إركاب موظف',
+        'تاريخ ووقت التحقق': formatArabicDateTimeWithSeconds(l.checkedAt),
+        'القائمة المستخدمة': l.listTitle,
+        'نوع الجهاز': l.deviceType === 'mobile' ? 'هاتف ذكي' : l.deviceType === 'tablet' ? 'جهاز لوحي' : dev.deviceLabelAr,
+        'نظام التشغيل': l.osName || dev.osName,
+        'المتصفح': l.browserName || dev.browserName,
+        'ملخص بيئة التشغيل': l.deviceLabel || dev.summaryLabelAr,
+        'معرف المتصفح / الجهاز الكامل': l.userAgent || 'مجهول',
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
@@ -473,15 +514,15 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
       </div>
 
       {/* Filters Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Search */}
         <div className="relative">
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => handleSetSearchTerm(e.target.value)}
-            placeholder="البحث بالرقم الوظيفي أو الاسم..."
-            className="w-full h-10 px-3 pr-9 text-xs bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] font-mono"
+            placeholder="البحث بالرقم، الاسم، المتصفح، أو نوع الجهاز..."
+            className="w-full h-10 px-3 pr-9 text-xs bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269]"
           />
           <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
         </div>
@@ -496,6 +537,20 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
             <option value="ALL">جميع نتائج التحقق (الكل)</option>
             <option value="AUTHORIZED">مصرح له الصعود بأمر إركاب فقط</option>
             <option value="NOT_AUTHORIZED">ليس لديه أمر إركاب موظف فقط</option>
+          </select>
+        </div>
+
+        {/* Device Filter */}
+        <div>
+          <select
+            value={deviceFilter}
+            onChange={(e) => handleSetDeviceFilter(e.target.value as any)}
+            className="w-full h-10 px-3 text-xs bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] font-medium text-slate-700 cursor-pointer"
+          >
+            <option value="ALL">كافة أنواع الأجهزة والمتصفحات</option>
+            <option value="mobile">📱 الهواتف الذكية (Mobile)</option>
+            <option value="desktop">💻 أجهزة الكمبيوتر (Desktop)</option>
+            <option value="tablet">📟 الأجهزة اللوحية (Tablet)</option>
           </select>
         </div>
 
@@ -573,6 +628,11 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
               ) : (
                 filteredLogs.map((log) => {
                   const isToday = isMatchingFilterDate(log.checkedAt, todayStr);
+                  const dev = parseUserAgentString(log.userAgent);
+                  const effectiveDevType = log.deviceType || dev.deviceType;
+                  const effectiveBrowser = log.browserName || dev.browserName;
+                  const effectiveOS = log.osName || dev.osName;
+
                   return (
                     <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3.5 px-4 font-mono font-bold text-[#002B49] text-sm dir-ltr text-right">
@@ -626,10 +686,33 @@ export const VerificationLogsView: React.FC<VerificationLogsViewProps> = ({
                         <div className="font-semibold text-[#002B49]">{log.listTitle}</div>
                       </td>
 
-                      <td className="py-3.5 px-4 text-slate-400 text-[11px] max-w-xs truncate">
-                        <span title={log.userAgent}>
-                          {log.userAgent ? log.userAgent.split(')')[0] + ')' : 'متصفح ويب'}
-                        </span>
+                      <td className="py-3.5 px-4 text-slate-700">
+                        <div
+                          className="flex flex-col gap-1 max-w-[220px]"
+                          title={`${dev.summaryLabelAr}\nمعرف الجهاز: ${log.userAgent || 'غير متوفر'}`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            {effectiveDevType === 'mobile' ? (
+                              <Smartphone className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                            ) : effectiveDevType === 'tablet' ? (
+                              <Tablet className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                            ) : (
+                              <Monitor className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                            )}
+                            <span className="font-bold text-[11px] text-slate-800">
+                              {effectiveDevType === 'mobile' ? 'هاتف ذكي' : effectiveDevType === 'tablet' ? 'جهاز لوحي' : 'كمبيوتر'}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-medium">
+                              ({effectiveOS})
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                              <Globe className="w-2.5 h-2.5 text-slate-500" />
+                              <span>{effectiveBrowser}</span>
+                            </span>
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   );

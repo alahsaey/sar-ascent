@@ -61,6 +61,10 @@ export interface VerificationLog {
   checkedAt: string;
   ipAddress?: string;
   userAgent?: string;
+  deviceType?: 'desktop' | 'mobile' | 'tablet' | 'unknown';
+  browserName?: string;
+  osName?: string;
+  deviceLabel?: string;
 }
 
 export interface AdminUser {
