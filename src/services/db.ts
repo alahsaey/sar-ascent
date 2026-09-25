@@ -1239,29 +1239,40 @@ export async function getAdminUsers(): Promise<AdminUser[]> {
   for (const admin of loadedAdmins) {
     let secured = { ...admin };
 
-    // Seamless owner binding: Ensure Super Admin is officially Saleh
-    if (secured.id === 'admin-super-01') {
-      if (secured.name !== 'saleh h. alyassin' || secured.email !== 'alahsaey@gmail.com') {
+    // Seamless owner binding: Ensure Super Admin is officially Saleh and ALWAYS active
+    if (secured.id === 'admin-super-01' || secured.email.toLowerCase() === 'alahsaey@gmail.com') {
+      const needsHealing =
+        secured.name !== 'saleh h. alyassin' ||
+        secured.email !== 'alahsaey@gmail.com' ||
+        secured.status !== 'active' ||
+        secured.isTampered !== false ||
+        !secured.integritySignature;
+
+      if (needsHealing) {
+        secured.id = 'admin-super-01';
         secured.name = 'saleh h. alyassin';
         secured.email = 'alahsaey@gmail.com';
+        secured.role = 'super_admin';
         secured.status = 'active';
         secured.isTampered = false;
-        secured = await secureAdminRecord(secured, secured.pinCode || '202600');
+        secured.pinCode = secured.pinCode || '202600';
+        secured = await secureAdminRecord(secured, secured.pinCode);
         needsSync = true;
       }
     }
 
     // Check if missing salt, pinHash, or integrity signature
     if (!secured.pinHash || !secured.pinSalt || !secured.integritySignature) {
-      secured = await secureAdminRecord(secured);
+      secured = await secureAdminRecord(secured, secured.pinCode);
       needsSync = true;
     } else {
-      // Verify anti-tamper signature
+      // Re-verify and self-heal signature if needed without destructive auto-suspension
       const integrity = await verifyAdminIntegrity(secured);
       if (!integrity.valid) {
-        secured.isTampered = true;
-        secured.status = 'suspended'; // Automatically freeze tampered accounts
-        needsSync = true;
+        if (secured.pinCode) {
+          secured = await secureAdminRecord(secured, secured.pinCode);
+          needsSync = true;
+        }
       }
     }
 

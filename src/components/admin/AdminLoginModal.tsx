@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Mail,
@@ -7,9 +7,12 @@ import {
   ShieldCheck,
   Eye,
   EyeOff,
-  Hash
+  Hash,
+  UserCheck,
+  ChevronDown
 } from 'lucide-react';
 import { loginAdmin, loginWithPinOnly, loginAdminWithGoogle } from '../../services/auth';
+import { getAdminUsers } from '../../services/db';
 import { AdminUser } from '../../types';
 import { SarLogo } from '../SarLogo';
 
@@ -28,12 +31,25 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pinCode, setPinCode] = useState('');
+  const [selectedAdminId, setSelectedAdminId] = useState<string>('');
+  const [availableAdmins, setAvailableAdmins] = useState<AdminUser[]>([]);
   const [showPassword, setShowPassword] = useState(false);
   const [showPin, setShowPin] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  // Load registered active admins list for fast selection
+  useEffect(() => {
+    if (isOpen) {
+      getAdminUsers()
+        .then(users => {
+          setAvailableAdmins(users);
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -73,7 +89,8 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
     setLoading(true);
 
     try {
-      const user = await loginWithPinOnly(pinCode);
+      // Pass the selected admin ID or email to distinguish between multiple admins
+      const user = await loginWithPinOnly(pinCode, selectedAdminId || undefined);
       onLoginSuccess(user);
       onClose();
     } catch (err: any) {
@@ -201,9 +218,41 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           </div>
         )}
 
-        {/* 2. PIN / ALPHANUMERIC CODE LOGIN FORM */}
+        {/* 2. PIN / ALPHANUMERIC CODE LOGIN FORM WITH USER IDENTIFICATION */}
         {loginMode === 'pin' && (
           <form onSubmit={handleSubmitPin} className="space-y-4">
+            {/* Admin Selector to distinguish between users on the same machine */}
+            <div>
+              <label className="block text-xs font-bold text-[#002B49] mb-1.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 text-[#008269]" />
+                  <span>تحديد المشرف / المسؤول</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-normal">
+                  لتمييز حسابك عن المشرفين الآخرين
+                </span>
+              </label>
+
+              <div className="relative">
+                <select
+                  value={selectedAdminId}
+                  onChange={(e) => {
+                    setSelectedAdminId(e.target.value);
+                    setError(null);
+                  }}
+                  className="w-full h-11 px-3.5 pl-9 text-xs sm:text-sm font-semibold bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] appearance-none transition-all cursor-pointer text-slate-800"
+                >
+                  <option value="">-- كشف تلقائي بالرمز السري أو اختر اسم المشرف --</option>
+                  {availableAdmins.map((adm) => (
+                    <option key={adm.id} value={adm.id}>
+                      {adm.name} ({adm.role === 'super_admin' ? 'مدير عام' : adm.role === 'admin' ? 'مسؤول تدقيق' : 'مشاهد'}) - {adm.email}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            </div>
+
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-1.5">
@@ -232,7 +281,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                   maxLength={32}
                   value={pinCode}
                   onChange={(e) => setPinCode(e.target.value)}
-                  placeholder="أدخل الرمز السري (أرقام أو حروف)"
+                  placeholder="أدخل الرمز السري الخاص بك"
                   className="w-full h-12 px-4 pr-11 text-center text-base sm:text-lg tracking-wider font-mono bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] transition-all"
                 />
                 <Hash className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
@@ -269,16 +318,16 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           <form onSubmit={handleSubmitCredentials} className="space-y-3.5">
             <div>
               <label className="block text-xs font-bold text-[#002B49] mb-1.5">
-                البريد الإلكتروني الرسمي للمسؤول
+                البريد الإلكتروني الرسمي أو اسم المشرف
               </label>
               <div className="relative">
                 <input
-                  type="email"
+                  type="text"
                   required
                   dir="ltr"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="alahsaey@gmail.com أو admin@sar.com.sa"
+                  placeholder="alahsaey@gmail.com أو اسم المستخدم"
                   className="w-full h-11 px-3.5 pr-10 text-sm bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] transition-all font-mono"
                 />
                 <Mail className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />

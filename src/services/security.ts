@@ -95,17 +95,11 @@ export async function verifyAdminIntegrity(admin: AdminUser): Promise<{ valid: b
   }
 
   // Super Admin invariant safeguard
-  if (admin.id === 'admin-super-01') {
+  if (admin.id === 'admin-super-01' || admin.email === 'alahsaey@gmail.com') {
     if (admin.role !== 'super_admin') {
       return {
         valid: false,
         reason: 'محاولة غير مصرح بها لتقليص رتبة حساب المدير العام الجذري.'
-      };
-    }
-    if (admin.status === 'suspended') {
-      return {
-        valid: false,
-        reason: 'محاولة غير مصرح بها لتعطيل حساب المدير العام الجذري.'
       };
     }
   }
