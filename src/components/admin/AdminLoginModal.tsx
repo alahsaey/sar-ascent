@@ -1,18 +1,15 @@
 import React, { useState } from 'react';
 import {
   X,
-  Lock,
   Mail,
   ShieldAlert,
   KeyRound,
-  CheckCircle2,
-  TrainTrack,
   ShieldCheck,
   Eye,
   EyeOff,
   Hash
 } from 'lucide-react';
-import { loginAdmin, loginWithPinOnly } from '../../services/auth';
+import { loginAdmin, loginWithPinOnly, loginAdminWithGoogle } from '../../services/auth';
 import { AdminUser } from '../../types';
 import { SarLogo } from '../SarLogo';
 
@@ -33,10 +30,26 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   const [pinCode, setPinCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showPin, setShowPin] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setGoogleLoading(true);
+    try {
+      const user = await loginAdminWithGoogle();
+      onLoginSuccess(user);
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'فشل تسجيل الدخول عبر حساب Google.');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   const handleSubmitCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,7 +77,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
       onLoginSuccess(user);
       onClose();
     } catch (err: any) {
-      setError(err.message || 'الرقم السري غير مصرح له بالدخول.');
+      setError(err.message || 'الرمز السري غير مصرح له بالدخول.');
     } finally {
       setLoading(false);
     }
@@ -73,19 +86,19 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#002B49]/75 backdrop-blur-xs animate-in fade-in duration-150">
       <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl border border-slate-200 relative overflow-hidden">
-        {/* Top SAR Accent Line */}
-        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-[#002B49] via-[#008269] to-[#D0A85C]" />
+        {/* Decorative Top Accent */}
+        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-[#008269] via-[#002B49] to-[#D4A843]" />
 
         <button
           onClick={onClose}
-          className="absolute top-4 left-4 text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
-          title="إغلاق"
+          aria-label="إغلاق"
+          className="absolute top-5 left-5 p-2 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
 
-        <div className="text-center mb-5 pt-2">
-          <div className="inline-flex items-center justify-center mb-3">
+        <div className="text-center mb-5">
+          <div className="inline-flex items-center justify-center mb-2">
             <SarLogo variant="horizontal" theme="dark" size="md" />
           </div>
           <h3 className="text-xl font-black text-[#002B49] mt-2">
@@ -94,6 +107,57 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           <p className="text-xs text-slate-500 mt-1">
             منطقة مشفرة ومخصصة لمسؤولي ومراجعي تصاريح السفر فقط
           </p>
+        </div>
+
+        {/* 1. GOOGLE DIRECT AUTHENTICATION FOR ADMINS */}
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={googleLoading || loading}
+            className="w-full h-12 px-4 rounded-2xl bg-white border border-slate-300 hover:border-[#008269] hover:bg-emerald-50/30 text-slate-800 text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-3 shadow-xs hover:shadow-sm cursor-pointer disabled:opacity-50 group"
+          >
+            {googleLoading ? (
+              <div className="w-4 h-4 border-2 border-[#008269]/30 border-t-[#008269] rounded-full animate-spin" />
+            ) : (
+              <svg className="w-4 h-4 shrink-0 transition-transform group-hover:scale-110" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+                />
+              </svg>
+            )}
+            <span>الدخول المباشر بحساب Google للمسؤول</span>
+          </button>
+          <div className="flex items-center justify-between px-2 mt-1.5">
+            <span className="text-[10px] text-slate-500">
+              الدخول بضغطة زر دون الحاجة للرمز السري
+            </span>
+            <span className="text-[9px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md">
+              alahsaey@gmail.com
+            </span>
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="relative flex py-2 items-center mb-3">
+          <div className="flex-grow border-t border-slate-200" />
+          <span className="shrink-0 mx-3 text-[11px] font-bold text-slate-400">
+            أو الدخول بالرمز السري / كلمة المرور
+          </span>
+          <div className="flex-grow border-t border-slate-200" />
         </div>
 
         {/* Login Mode Switcher */}
@@ -137,8 +201,8 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           </div>
         )}
 
-        {/* PIN / ALPHANUMERIC CODE LOGIN FORM */}
-        {loginMode === 'pin' ? (
+        {/* 2. PIN / ALPHANUMERIC CODE LOGIN FORM */}
+        {loginMode === 'pin' && (
           <form onSubmit={handleSubmitPin} className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-1.5">
@@ -173,16 +237,19 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                 />
                 <Hash className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
               </div>
-              <p className="text-[10px] text-slate-500 mt-1.5 text-right flex items-center gap-1">
-                <span>🔒</span>
-                <span>يقبل الرمز أرقاماً وحروفاً إنجليزية ورموزاً لتنويع خيارات كل مستخدم، ويتم التحقق المشفر فورياً.</span>
+              <p className="text-[10px] text-slate-500 mt-2 flex items-center justify-between">
+                <span className="flex items-center gap-1">
+                  <span>🔒</span>
+                  <span>التحقق مشفر بالخزنة الرقمية المقاومة للتخمين</span>
+                </span>
+                <span className="text-slate-400 font-mono text-[9px]">SHA-256 + Salt</span>
               </p>
             </div>
 
             <button
               id="btn-submit-pin-login"
               type="submit"
-              disabled={loading || !pinCode.trim()}
+              disabled={loading || !pinCode.trim() || googleLoading}
               className="w-full h-12 rounded-xl bg-[#008269] hover:bg-[#006854] text-white text-sm font-black transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow-md cursor-pointer disabled:opacity-50"
             >
               {loading ? (
@@ -195,12 +262,14 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               )}
             </button>
           </form>
-        ) : (
-          /* CREDENTIALS LOGIN FORM */
+        )}
+
+        {/* 3. CREDENTIALS LOGIN FORM */}
+        {loginMode === 'credentials' && (
           <form onSubmit={handleSubmitCredentials} className="space-y-3.5">
             <div>
               <label className="block text-xs font-bold text-[#002B49] mb-1.5">
-                البريد الإلكتروني الرسمي
+                البريد الإلكتروني الرسمي للمسؤول
               </label>
               <div className="relative">
                 <input
@@ -209,7 +278,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                   dir="ltr"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@sar.com.sa"
+                  placeholder="alahsaey@gmail.com أو admin@sar.com.sa"
                   className="w-full h-11 px-3.5 pr-10 text-sm bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] transition-all font-mono"
                 />
                 <Mail className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
@@ -247,7 +316,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             <button
               id="btn-submit-admin-login"
               type="submit"
-              disabled={loading || !email.trim() || !password.trim()}
+              disabled={loading || !email.trim() || !password.trim() || googleLoading}
               className="w-full h-12 rounded-xl bg-[#008269] hover:bg-[#006854] text-white text-sm font-black transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow-md cursor-pointer disabled:opacity-50 mt-2"
             >
               {loading ? (

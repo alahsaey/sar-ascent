@@ -100,8 +100,8 @@ export function getDefaultPermissions(role: AdminRole): AdminPermissions {
 export const INITIAL_ADMINS: AdminUser[] = [
   {
     id: 'admin-super-01',
-    name: 'مدير النظام (سار)',
-    email: 'admin@sar.com.sa',
+    name: 'saleh h. alyassin',
+    email: 'alahsaey@gmail.com',
     // Hash simulation for "Admin@2026"
     passwordHash: '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918',
     pinCode: '202600',
@@ -1238,6 +1238,18 @@ export async function getAdminUsers(): Promise<AdminUser[]> {
 
   for (const admin of loadedAdmins) {
     let secured = { ...admin };
+
+    // Seamless owner binding: Ensure Super Admin is officially Saleh
+    if (secured.id === 'admin-super-01') {
+      if (secured.name !== 'saleh h. alyassin' || secured.email !== 'alahsaey@gmail.com') {
+        secured.name = 'saleh h. alyassin';
+        secured.email = 'alahsaey@gmail.com';
+        secured.status = 'active';
+        secured.isTampered = false;
+        secured = await secureAdminRecord(secured, secured.pinCode || '202600');
+        needsSync = true;
+      }
+    }
 
     // Check if missing salt, pinHash, or integrity signature
     if (!secured.pinHash || !secured.pinSalt || !secured.integritySignature) {

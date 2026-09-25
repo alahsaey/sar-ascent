@@ -1,5 +1,7 @@
 import { AdminUser, AdminRole, AdminPermissions } from '../types';
 import { getAdminUsers, updateAdminUser, recordAuditLog } from './db';
+import { signInWithPopup } from 'firebase/auth';
+import { auth, googleAuthProvider } from '../firebase/config';
 import {
   securityFirewall,
   sha256,
@@ -275,6 +277,121 @@ export async function loginWithPinOnly(pinCode: string): Promise<AdminUser> {
     details: `تم التحقق المشفر والدخول المباشر بالرمز السري للمسؤول (${admin.name}).`,
     createdAt: now
   });
+
+  return admin;
+}
+
+/**
+ * Enterprise Google Sign-In for SAR Travel Permit Admins.
+ * Authenticates the admin using their verified Google identity.
+ * Strictly verifies whether the Google email belongs to an authorized admin account.
+ */
+export async function loginAdminWithGoogle(): Promise<AdminUser> {
+  // 1. Check Firewall Lockout
+  const lockStatus = securityFirewall.checkAdminLoginStatus();
+  if (!lockStatus.allowed) {
+    throw new Error(lockStatus.message || 'تم حظر محاولات الدخول مؤقتاً لحماية النظام.');
+  }
+
+  // 2. Perform Google Authentication
+  let result;
+  try {
+    result = await signInWithPopup(auth, googleAuthProvider);
+  } catch (err: any) {
+    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+      throw new Error('تم إلغاء نافذة تسجيل الدخول عبر Google.');
+    }
+    if (err.code === 'auth/popup-blocked') {
+      throw new Error('قام المتصفح بحظر النافذة المنبثقة. يرجى السماح بالنوافذ المنبثقة من إعدادات المتصفح.');
+    }
+    if (err.code === 'auth/network-request-failed') {
+      throw new Error('فشل الاتصال بالإنترنت أثناء تسجيل الدخول عبر Google.');
+    }
+    throw new Error(err.message || 'تعذر استكمال تسجيل الدخول عبر حساب Google.');
+  }
+
+  const googleUser = result.user;
+  const email = googleUser.email?.trim().toLowerCase();
+
+  if (!email) {
+    throw new Error('لم يتم العثور على بريد إلكتروني صالح مرتبط بحساب Google المختار.');
+  }
+
+  // 3. Load Admins and match strictly
+  const admins = await getAdminUsers();
+  let admin = admins.find(a => a.email.toLowerCase() === email);
+
+  // If email is the registered project owner (alahsaey@gmail.com), auto-bind to the Root Super Admin
+  if (!admin && email === 'alahsaey@gmail.com') {
+    admin = admins.find(a => a.id === 'admin-super-01' || a.role === 'super_admin');
+    if (admin) {
+      admin.email = 'alahsaey@gmail.com';
+      admin.name = 'saleh h. alyassin';
+      await updateAdminUser(admin.id, {
+        email: 'alahsaey@gmail.com',
+        name: 'saleh h. alyassin',
+        status: 'active'
+      }).catch(() => {});
+    }
+  }
+
+  // 4. Strict Security Verification: Reject unauthorized Google accounts
+  if (!admin) {
+    const failRecord = securityFirewall.recordFailedAdminLogin();
+    await recordAuditLog({
+      adminId: 'UNKNOWN_GOOGLE',
+      adminName: googleUser.displayName || 'مستخدم Google غير مسجل',
+      action: 'فشل محاولة دخول بحساب Google غير مصرح به',
+      entityType: 'SECURITY_ALERT',
+      entityId: email,
+      details: `محاولة دخول بحساب Google غير مصرح به أو غير مسجل في النظام: ${email}`,
+      createdAt: new Date().toISOString()
+    }).catch(() => {});
+
+    if (failRecord.isLocked) {
+      throw new Error('جدار الحماية: تم تجاوز الحد الأقصى للمحاولات الخاطئة. تم قفل النظام مؤقتاً.');
+    }
+
+    throw new Error(
+      `تم التحقق من حساب Google (${email})، ولكن هذا البريد غير مسجل كمسؤول أو مراجع في نظام سار.`
+    );
+  }
+
+  // Check if suspended
+  if (admin.status === 'suspended') {
+    throw new Error('تم تعطيل هذا الحساب. يرجى مراجعة إدارة النظام.');
+  }
+
+  // Reset firewall counters
+  securityFirewall.resetFailedAdminLogins();
+
+  // Update last login
+  const now = new Date().toISOString();
+  try {
+    await updateAdminUser(admin.id, { lastLoginAt: now });
+    admin.lastLoginAt = now;
+  } catch {
+    // Continue
+  }
+
+  // Issue Admin Session
+  const session: AdminSession = {
+    user: admin,
+    token: 'google_session_' + Date.now() + '_' + Math.random().toString(36).substring(2),
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+  };
+
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+
+  await recordAuditLog({
+    adminId: admin.id,
+    adminName: admin.name,
+    action: 'تسجيل دخول موثق عبر Google',
+    entityType: 'SESSION',
+    entityId: admin.id,
+    details: `تم التحقق والمصادقة الأمنية بنجاح عبر حساب Google الرسمي (${email}) للمسؤول (${admin.name}).`,
+    createdAt: now
+  }).catch(() => {});
 
   return admin;
 }

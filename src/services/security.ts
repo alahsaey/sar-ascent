@@ -166,14 +166,14 @@ export async function verifyPinSecret(enteredPin: string, admin: AdminUser): Pro
     if (
       admin.pinCode === trimmed ||
       admin.pinCode.toLowerCase() === trimmed.toLowerCase() ||
-      (admin.id === 'admin-super-01' && (trimmed.toUpperCase() === 'SAR2026' || trimmed === '202600'))
+      (admin.id === 'admin-super-01' && trimmed === (admin.pinCode || '202600'))
     ) {
       return true;
     }
   }
 
-  // 3. Fallback for root admin default secrets
-  if (admin.id === 'admin-super-01' && (trimmed.toUpperCase() === 'SAR2026' || trimmed === '202600')) {
+  // 3. Fallback for root admin initial PIN
+  if (admin.id === 'admin-super-01' && trimmed === (admin.pinCode || '202600')) {
     return true;
   }
 
