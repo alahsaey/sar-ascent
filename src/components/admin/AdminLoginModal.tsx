@@ -11,7 +11,12 @@ import {
   UserCheck,
   ChevronDown
 } from 'lucide-react';
-import { loginAdmin, loginWithPinOnly, loginAdminWithGoogle } from '../../services/auth';
+import {
+  loginAdmin,
+  loginWithPinOnly,
+  loginAdminWithGoogle,
+  formatAdminDisplayName
+} from '../../services/auth';
 import { getAdminUsers } from '../../services/db';
 import { AdminUser } from '../../types';
 import { SarLogo } from '../SarLogo';
@@ -163,7 +168,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               الدخول بضغطة زر دون الحاجة للرمز السري
             </span>
             <span className="text-[9px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md">
-              alahsaey@gmail.com
+              المشرف العام (المالك)
             </span>
           </div>
         </div>
@@ -226,7 +231,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               <label className="block text-xs font-bold text-[#002B49] mb-1.5 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
                   <UserCheck className="w-3.5 h-3.5 text-[#008269]" />
-                  <span>تحديد المشرف / المسؤول</span>
+                  <span>تحديد حساب المسؤول</span>
                 </span>
                 <span className="text-[10px] text-slate-400 font-normal">
                   لتمييز حسابك عن المشرفين الآخرين
@@ -240,12 +245,12 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                     setSelectedAdminId(e.target.value);
                     setError(null);
                   }}
-                  className="w-full h-11 px-3.5 pl-9 text-xs sm:text-sm font-semibold bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] appearance-none transition-all cursor-pointer text-slate-800"
+                  className="w-full h-11 px-3.5 pl-9 text-xs sm:text-sm font-bold bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] appearance-none transition-all cursor-pointer text-slate-800 font-mono"
                 >
-                  <option value="">-- كشف تلقائي بالرمز السري أو اختر اسم المشرف --</option>
+                  <option value="">-- كشف تلقائي بالرمز السري أو اختر الحساب --</option>
                   {availableAdmins.map((adm) => (
                     <option key={adm.id} value={adm.id}>
-                      {adm.name} ({adm.role === 'super_admin' ? 'مدير عام' : adm.role === 'admin' ? 'مسؤول تدقيق' : 'مشاهد'}) - {adm.email}
+                      {formatAdminDisplayName(adm.name)}
                     </option>
                   ))}
                 </select>
@@ -327,7 +332,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                   dir="ltr"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="alahsaey@gmail.com أو اسم المستخدم"
+                  placeholder="البريد الإلكتروني أو اسم الحساب"
                   className="w-full h-11 px-3.5 pr-10 text-sm bg-[#F4F7F9] border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#008269]/20 focus:border-[#008269] transition-all font-mono"
                 />
                 <Mail className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />

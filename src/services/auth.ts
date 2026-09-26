@@ -21,6 +21,25 @@ export interface AdminSession {
 export { sha256 };
 
 /**
+ * Formats admin name for privacy on shared login terminals:
+ * Displays only the first initial and full family name (e.g. "S.Alyassin").
+ * Keeps email and job titles strictly hidden.
+ */
+export function formatAdminDisplayName(name: string): string {
+  if (!name) return 'المسؤول';
+  const cleanName = name.replace(/[()]/g, '').trim();
+  const parts = cleanName.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'المسؤول';
+  if (parts.length === 1) return parts[0];
+
+  const firstLetter = parts[0].charAt(0).toUpperCase();
+  const rawLast = parts[parts.length - 1];
+  const lastName = rawLast.charAt(0).toUpperCase() + rawLast.slice(1);
+  const isAscii = /^[A-Za-z]/.test(firstLetter);
+  return isAscii ? `${firstLetter}.${lastName}` : `${firstLetter}. ${lastName}`;
+}
+
+/**
  * Login admin using email and either Password OR Secret PIN Code.
  * Enforces anti-brute force firewall lockout, cryptographic vault, and anti-tamper verification.
  */
@@ -226,7 +245,7 @@ export async function loginWithPinOnly(pinCode: string, adminIdentifier?: string
       if (failRecord.isLocked) {
         throw new Error('جدار الحماية: تم تجاوز الحد الأقصى للمحاولات الخاطئة. تم قفل النظام لمدة 5 دقائق.');
       }
-      throw new Error(`الرمز السري غير صحيح للمشرف (${targetAdmin.name}). متبقي لديك ${failRecord.attemptsRemaining} محاولات.`);
+      throw new Error(`الرمز السري غير صحيح للحساب (${formatAdminDisplayName(targetAdmin.name)}). متبقي لديك ${failRecord.attemptsRemaining} محاولات.`);
     }
 
     admin = targetAdmin;
@@ -270,7 +289,7 @@ export async function loginWithPinOnly(pinCode: string, adminIdentifier?: string
   } else {
     // Check if account was suspended
     if (admin.status === 'suspended') {
-      throw new Error(`حساب المشرف (${admin.name}) معطل حالياً. يرجى مراجعة إدارة النظام.`);
+      throw new Error(`حساب المشرف (${formatAdminDisplayName(admin.name)}) معطل حالياً. يرجى مراجعة إدارة النظام.`);
     }
 
     // Verify cryptographic signature of the admin record
