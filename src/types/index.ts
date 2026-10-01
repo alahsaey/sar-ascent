@@ -103,6 +103,16 @@ export interface ParsedEmployeeItem {
   department?: string;
 }
 
+export interface DuplicateEmployeeItem {
+  rowNumber: number; // Row number in original Excel/CSV file (1-indexed)
+  number: string; // Employee ID that was duplicated
+  name?: string; // Name in this duplicate row
+  allowedRoute?: string; // Allowed route in this duplicate row
+  originalRowNumber?: number; // Row number of the first occurrence
+  originalName?: string; // Name of the first occurrence
+  originalRoute?: string; // Route of the first occurrence
+}
+
 export interface ExcelColumnInfo {
   index: number;
   label: string;
@@ -116,6 +126,7 @@ export interface ExcelImportSummary {
   validEmployeeNumbers: string[];
   validEmployees: ParsedEmployeeItem[];
   duplicateCount: number;
+  duplicates: DuplicateEmployeeItem[];
   emptyRowsCount: number;
   sampleData: string[];
   sampleDataWithNames: ParsedEmployeeItem[];

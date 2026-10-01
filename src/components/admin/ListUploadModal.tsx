@@ -13,7 +13,11 @@ import {
   TrainTrack,
   MapPin,
   UserCheck,
-  Hash
+  Hash,
+  Eye,
+  Search,
+  Copy,
+  Layers
 } from 'lucide-react';
 import {
   parseEmployeeFile,
@@ -47,6 +51,11 @@ export const ListUploadModal: React.FC<ListUploadModalProps> = ({
   const [selectedRouteCol, setSelectedRouteCol] = useState<number>(-1);
   const [dataStartRow, setDataStartRow] = useState<number>(1);
 
+  // Tab & search states for preview
+  const [activeTab, setActiveTab] = useState<'valid' | 'duplicates'>('valid');
+  const [previewSearch, setPreviewSearch] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   const [listTitle, setListTitle] = useState('');
   const [notes, setNotes] = useState('');
   const [archiveOtherActiveLists, setArchiveOtherActiveLists] = useState(true);
@@ -77,6 +86,7 @@ export const ListUploadModal: React.FC<ListUploadModalProps> = ({
       setSelectedRouteCol(parsed.routeColIndex);
       setDataStartRow(parsed.dataStartRowIndex + 1); // 1-indexed for user UI
       setListTitle(selectedFile.name.replace(/\.[^/.]+$/, ''));
+      setActiveTab('valid');
       setStep('preview');
     } catch (err: any) {
       setError(err.message || 'فشل في قراءة الملف ومعالجته. يرجى التأكد من محتواه.');
@@ -131,6 +141,7 @@ export const ListUploadModal: React.FC<ListUploadModalProps> = ({
       validEmployeeNumbers: recomputed.validEmployeeNumbers,
       validEmployees: recomputed.validEmployees,
       duplicateCount: recomputed.duplicateCount,
+      duplicates: recomputed.duplicates,
       emptyRowsCount: recomputed.emptyRowsCount,
       sampleData: recomputed.validEmployeeNumbers.slice(0, 10),
       sampleDataWithNames: recomputed.validEmployees.slice(0, 15),
@@ -143,6 +154,12 @@ export const ListUploadModal: React.FC<ListUploadModalProps> = ({
       dataStartRowIndex: Math.max(0, newDataStartRow1Indexed - 1),
       warnings: recomputed.warnings.slice(0, 5),
     });
+  };
+
+  const handleCopyId = (id: string) => {
+    navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleSaveAndApprove = async (shouldApproveDirectly: boolean) => {
@@ -197,7 +214,35 @@ export const ListUploadModal: React.FC<ListUploadModalProps> = ({
     setListTitle('');
     setNotes('');
     setShowColumnTuner(false);
+    setActiveTab('valid');
+    setPreviewSearch('');
   };
+
+  const filteredValidEmployees = summary
+    ? summary.validEmployees.filter((emp) => {
+        if (!previewSearch.trim()) return true;
+        const term = previewSearch.toLowerCase().trim();
+        return (
+          emp.number.toLowerCase().includes(term) ||
+          (emp.name && emp.name.toLowerCase().includes(term)) ||
+          (emp.allowedRoute && emp.allowedRoute.toLowerCase().includes(term))
+        );
+      })
+    : [];
+
+  const filteredDuplicates = summary
+    ? (summary.duplicates || []).filter((dup) => {
+        if (!previewSearch.trim()) return true;
+        const term = previewSearch.toLowerCase().trim();
+        return (
+          dup.number.toLowerCase().includes(term) ||
+          (dup.name && dup.name.toLowerCase().includes(term)) ||
+          (dup.originalName && dup.originalName.toLowerCase().includes(term)) ||
+          String(dup.rowNumber).includes(term) ||
+          String(dup.originalRowNumber || '').includes(term)
+        );
+      })
+    : [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#002B49]/70 backdrop-blur-xs animate-in fade-in duration-150">
@@ -472,26 +517,57 @@ export const ListUploadModal: React.FC<ListUploadModalProps> = ({
                 )}
 
                 {/* Validation Stats Grid */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-[#008269]/10 border border-[#008269]/20 rounded-xl p-3 text-center">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div
+                    onClick={() => setActiveTab('valid')}
+                    className={`rounded-2xl p-3 text-center transition-all cursor-pointer border ${
+                      activeTab === 'valid'
+                        ? 'bg-[#008269]/15 border-[#008269] shadow-xs'
+                        : 'bg-[#008269]/10 border-[#008269]/20 hover:border-[#008269]/50'
+                    }`}
+                  >
                     <div className="text-xl font-black text-[#008269] font-mono">
                       {summary.validEmployees.length.toLocaleString('ar-SA')}
                     </div>
-                    <div className="text-[11px] font-bold text-[#008269] mt-0.5">
-                      موظف معتمد ومطابق
+                    <div className="text-[11px] font-bold text-[#008269] mt-0.5 flex items-center justify-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>موظف معتمد ومطابق</span>
                     </div>
                   </div>
 
-                  <div className="bg-[#F4F7F9] border border-slate-200 rounded-xl p-3 text-center">
-                    <div className="text-xl font-bold text-slate-700 font-mono">
+                  <div
+                    onClick={() => summary.duplicateCount > 0 && setActiveTab('duplicates')}
+                    className={`rounded-2xl p-3 text-center transition-all border ${
+                      summary.duplicateCount > 0
+                        ? activeTab === 'duplicates'
+                          ? 'bg-amber-100/80 border-amber-500 shadow-xs cursor-pointer ring-2 ring-amber-400/30'
+                          : 'bg-amber-50/80 border-amber-300 hover:border-amber-500 hover:bg-amber-100/50 cursor-pointer'
+                        : 'bg-[#F4F7F9] border-slate-200 cursor-default'
+                    }`}
+                  >
+                    <div
+                      className={`text-xl font-black font-mono ${
+                        summary.duplicateCount > 0 ? 'text-amber-700' : 'text-slate-700'
+                      }`}
+                    >
                       {summary.duplicateCount}
                     </div>
-                    <div className="text-[11px] font-medium text-slate-500 mt-0.5">
-                      تكرارات مستبعدة
+                    <div
+                      className={`text-[11px] font-bold mt-0.5 flex items-center justify-center gap-1 ${
+                        summary.duplicateCount > 0 ? 'text-amber-800' : 'text-slate-500'
+                      }`}
+                    >
+                      {summary.duplicateCount > 0 && <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />}
+                      <span>تكرارات مستبعدة</span>
+                      {summary.duplicateCount > 0 && (
+                        <span className="text-[9px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded-full font-bold">
+                          انقر للمعاينة
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  <div className="bg-[#F4F7F9] border border-slate-200 rounded-xl p-3 text-center">
+                  <div className="bg-[#F4F7F9] border border-slate-200 rounded-2xl p-3 text-center">
                     <div className="text-xl font-bold text-slate-700 font-mono">
                       {summary.emptyRowsCount}
                     </div>
@@ -501,54 +577,263 @@ export const ListUploadModal: React.FC<ListUploadModalProps> = ({
                   </div>
                 </div>
 
-                {/* Sample Data Preview with Employee Names, Numbers, and Allowed Routes */}
-                <div>
-                  <div className="text-xs font-bold text-[#002B49] mb-2 flex items-center justify-between">
-                    <span>معاينة البيانات المستخرجة من الملف:</span>
-                    <span className="text-[11px] font-bold text-[#008269]">
-                      ✓ قراءة كاملة للأعمدة مع الحفاظ على الأصفار البادئة
-                    </span>
+                {/* Duplicates Alert Box with Direct Action */}
+                {summary.duplicateCount > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-50 via-amber-50/80 to-amber-100/40 border border-amber-300 text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs animate-in fade-in">
+                    <div className="flex items-start gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0 text-amber-700 mt-0.5">
+                        <AlertTriangle className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black text-amber-950 flex items-center gap-2 flex-wrap">
+                          <span>تنبيه: تم رصد {summary.duplicateCount} سجل مكرر في الملف المرفوع</span>
+                          <span className="bg-amber-200/90 text-amber-900 text-[10px] px-2 py-0.5 rounded-md font-bold">
+                            استبعاد تلقائي لمنع الازدواجية
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-amber-900/90 mt-0.5 leading-relaxed">
+                          تم استبعاد السطور المكررة تلقائياً واعتماد أول ظهور لكل موظف. يمكنك معاينة الأسماء والسطور المكررة أدناه للتثبت مع صاحب السجل.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab(activeTab === 'duplicates' ? 'valid' : 'duplicates')}
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0 self-end sm:self-center"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>{activeTab === 'duplicates' ? 'عرض قائمة المعتمدين' : `معاينة الأسماء المكررة (${summary.duplicateCount})`}</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Segmented Tab Header & Data Preview with Search */}
+                <div className="space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                    {/* Tabs */}
+                    <div className="flex items-center gap-1.5 bg-[#F4F7F9] p-1 rounded-xl border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('valid')}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          activeTab === 'valid'
+                            ? 'bg-[#008269] text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>الموظفون المعتمدون ({summary.validEmployees.length})</span>
+                      </button>
+
+                      {summary.duplicateCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('duplicates')}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            activeTab === 'duplicates'
+                              ? 'bg-amber-600 text-white shadow-2xs'
+                              : 'text-amber-800 hover:bg-amber-100/50'
+                          }`}
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span>الأسماء المكررة المستبعدة ({summary.duplicateCount})</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Quick Search */}
+                    <div className="relative min-w-[200px]">
+                      <input
+                        type="text"
+                        value={previewSearch}
+                        onChange={(e) => setPreviewSearch(e.target.value)}
+                        placeholder="بحث بالرقم أو الاسم أو السطر..."
+                        className="w-full h-8 px-2.5 pr-8 text-xs bg-[#F4F7F9] border border-slate-300 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#008269] focus:border-[#008269]"
+                      />
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                      {previewSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewSearch('')}
+                          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-52 overflow-y-auto shadow-2xs">
-                    <table className="w-full text-xs text-right">
-                      <thead className="bg-[#002B49] text-white font-bold sticky top-0">
-                        <tr>
-                          <th className="py-2.5 px-3 w-10 text-center">#</th>
-                          <th className="py-2.5 px-3 w-28">الرقم الوظيفي (ID)</th>
-                          <th className="py-2.5 px-3">اسم الموظف / السائق</th>
-                          <th className="py-2.5 px-3">جهة ومسار السفر (Location)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {summary.sampleDataWithNames.map((emp, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                            <td className="py-2 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
-                            <td className="py-2 px-3 font-mono font-bold text-[#008269] dir-ltr text-right bg-emerald-50/50">
-                              {emp.number}
-                            </td>
-                            <td className="py-2 px-3 font-bold text-[#002B49]">
-                              {emp.name ? (
-                                emp.name
-                              ) : (
-                                <span className="text-slate-400 font-normal italic">-- لم يحدد في الملف --</span>
-                              )}
-                            </td>
-                            <td className="py-2 px-3 text-slate-600 font-medium">
-                              {emp.allowedRoute ? (
-                                <span className="inline-flex items-center gap-1 bg-[#D0A85C]/15 text-[#8A6A23] font-bold px-2 py-0.5 rounded-md border border-[#D0A85C]/30 text-[11px]">
-                                  <MapPin className="w-3 h-3 shrink-0" />
-                                  <span>{emp.allowedRoute}</span>
-                                </span>
-                              ) : (
-                                <span className="text-slate-400 font-normal italic">كافة الخطوط</span>
-                              )}
-                            </td>
+                  {/* TAB 1: VALID EMPLOYEES PREVIEW */}
+                  {activeTab === 'valid' && (
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-56 overflow-y-auto shadow-2xs">
+                      <table className="w-full text-xs text-right">
+                        <thead className="bg-[#002B49] text-white font-bold sticky top-0 z-10">
+                          <tr>
+                            <th className="py-2.5 px-3 w-10 text-center">#</th>
+                            <th className="py-2.5 px-3 w-28">الرقم الوظيفي (ID)</th>
+                            <th className="py-2.5 px-3">اسم الموظف / السائق</th>
+                            <th className="py-2.5 px-3">جهة ومسار السفر (Location)</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {filteredValidEmployees.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="py-6 text-center text-slate-400">
+                                لا توجد نتائج مطابقة للبحث "{previewSearch}"
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredValidEmployees.map((emp, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                <td className="py-2 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
+                                <td className="py-2 px-3 font-mono font-bold text-[#008269] dir-ltr text-right bg-emerald-50/50">
+                                  {emp.number}
+                                </td>
+                                <td className="py-2 px-3 font-bold text-[#002B49]">
+                                  {emp.name ? (
+                                    emp.name
+                                  ) : (
+                                    <span className="text-slate-400 font-normal italic">-- لم يحدد في الملف --</span>
+                                  )}
+                                </td>
+                                <td className="py-2 px-3 text-slate-600 font-medium">
+                                  {emp.allowedRoute ? (
+                                    <span className="inline-flex items-center gap-1 bg-[#D0A85C]/15 text-[#8A6A23] font-bold px-2 py-0.5 rounded-md border border-[#D0A85C]/30 text-[11px]">
+                                      <MapPin className="w-3 h-3 shrink-0" />
+                                      <span>{emp.allowedRoute}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal italic">كافة الخطوط</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* TAB 2: DUPLICATES INSPECTION PREVIEW */}
+                  {activeTab === 'duplicates' && (
+                    <div className="space-y-2">
+                      <div className="border border-amber-300/80 rounded-2xl overflow-hidden max-h-60 overflow-y-auto shadow-2xs">
+                        <table className="w-full text-xs text-right">
+                          <thead className="bg-amber-800 text-white font-bold sticky top-0 z-10">
+                            <tr>
+                              <th className="py-2.5 px-3 w-10 text-center">#</th>
+                              <th className="py-2.5 px-3 w-28">السطر في الملف</th>
+                              <th className="py-2.5 px-3 w-32">الرقم الوظيفي (ID)</th>
+                              <th className="py-2.5 px-3">الاسم في السطر المكرر</th>
+                              <th className="py-2.5 px-3">مسار السفر المكرر</th>
+                              <th className="py-2.5 px-3">السجل الأصلي المعتمد</th>
+                              <th className="py-2.5 px-3 w-24 text-center">الحالة</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-amber-100 bg-white">
+                            {filteredDuplicates.length === 0 ? (
+                              <tr>
+                                <td colSpan={7} className="py-6 text-center text-slate-400">
+                                  لا توجد سجلات مكررة مطابقة للبحث
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredDuplicates.map((dup, idx) => (
+                                <tr key={idx} className="hover:bg-amber-50/50 transition-colors bg-amber-50/20">
+                                  <td className="py-2.5 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
+                                  
+                                  {/* Excel Sheet Row Number */}
+                                  <td className="py-2.5 px-3">
+                                    <span className="inline-flex items-center gap-1 font-mono font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-md text-[11px]">
+                                      <span>السطر</span>
+                                      <span>{dup.rowNumber}</span>
+                                    </span>
+                                  </td>
+
+                                  {/* Duplicate ID */}
+                                  <td className="py-2.5 px-3 font-mono font-bold text-amber-900 dir-ltr text-right">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCopyId(dup.number)}
+                                        title="نسخ الرقم الوظيفي"
+                                        className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                                      >
+                                        {copiedId === dup.number ? (
+                                          <Check className="w-3 h-3 text-emerald-600" />
+                                        ) : (
+                                          <Copy className="w-3 h-3" />
+                                        )}
+                                      </button>
+                                      <span>{dup.number}</span>
+                                    </div>
+                                  </td>
+
+                                  {/* Name in duplicate row */}
+                                  <td className="py-2.5 px-3 font-bold text-slate-900">
+                                    {dup.name ? (
+                                      <span className="text-amber-950 font-black">{dup.name}</span>
+                                    ) : (
+                                      <span className="text-slate-400 font-normal italic">-- لم يحدد في السطر --</span>
+                                    )}
+                                  </td>
+
+                                  {/* Route in duplicate row */}
+                                  <td className="py-2.5 px-3 text-slate-600">
+                                    {dup.allowedRoute ? (
+                                      <span className="text-[11px] font-medium text-slate-700">
+                                        {dup.allowedRoute}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-400 font-normal italic">كافة الخطوط</span>
+                                    )}
+                                  </td>
+
+                                  {/* Comparison with Original First Occurrence */}
+                                  <td className="py-2.5 px-3">
+                                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-1.5 text-[11px] text-emerald-900">
+                                      <div className="font-bold flex items-center gap-1">
+                                        <span className="bg-emerald-200/80 px-1 py-0.2 rounded text-[10px]">
+                                          السطر {dup.originalRowNumber || 'السابق'}
+                                        </span>
+                                        <span>{dup.originalName || dup.number}</span>
+                                      </div>
+                                      {dup.originalRoute && (
+                                        <div className="text-[10px] text-emerald-700 mt-0.5 truncate max-w-[200px]" title={dup.originalRoute}>
+                                          المسار: {dup.originalRoute}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  {/* Status */}
+                                  <td className="py-2.5 px-3 text-center">
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+                                      <span>🚫</span>
+                                      <span>مستبعد</span>
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 text-[11px] flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <span>💡</span>
+                          <span>
+                            تم استبعاد هذه السجلات آلياً لأن الرقم الوظيفي مسجل مسبقاً بنفس القائمة في سطر أعلى، لضمان عدم وجود بيانات متطابقة أو متضاربة.
+                          </span>
+                        </span>
+                        <span className="font-bold text-[#002B49]">
+                          إجمالي المستبعد: {summary.duplicateCount}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Form fields: Title and Notes */}

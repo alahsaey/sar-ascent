@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { ExcelImportSummary, ParsedEmployeeItem, ExcelColumnInfo } from '../types';
+import { ExcelImportSummary, ParsedEmployeeItem, ExcelColumnInfo, DuplicateEmployeeItem } from '../types';
 
 /**
  * Normalizes an employee number string:
@@ -229,14 +229,16 @@ export function reparseRowsWithColumns(
   validEmployeeNumbers: string[];
   validEmployees: ParsedEmployeeItem[];
   duplicateCount: number;
+  duplicates: DuplicateEmployeeItem[];
   emptyRowsCount: number;
   warnings: string[];
 } {
   const { dataStartRowIndex, idColIndex, nameColIndex = -1, routeColIndex = -1 } = options;
 
-  const numbersSet = new Set<string>();
+  const seenMap = new Map<string, { rowNumber: number; item: ParsedEmployeeItem }>();
   const validEmployeeNumbers: string[] = [];
   const validEmployees: ParsedEmployeeItem[] = [];
+  const duplicates: DuplicateEmployeeItem[] = [];
   let duplicateCount = 0;
   let emptyRowsCount = 0;
   const warnings: string[] = [];
@@ -280,16 +282,31 @@ export function reparseRowsWithColumns(
       }
     }
 
-    if (numbersSet.has(cleanedId)) {
+    const employeeItem: ParsedEmployeeItem = {
+      number: cleanedId,
+      name: employeeName,
+      allowedRoute: allowedRoute,
+    };
+
+    if (seenMap.has(cleanedId)) {
+      const firstOccurrence = seenMap.get(cleanedId);
       duplicateCount++;
-    } else {
-      numbersSet.add(cleanedId);
-      validEmployeeNumbers.push(cleanedId);
-      validEmployees.push({
+      duplicates.push({
+        rowNumber: r + 1,
         number: cleanedId,
         name: employeeName,
         allowedRoute: allowedRoute,
+        originalRowNumber: firstOccurrence?.rowNumber,
+        originalName: firstOccurrence?.item.name,
+        originalRoute: firstOccurrence?.item.allowedRoute,
       });
+    } else {
+      seenMap.set(cleanedId, {
+        rowNumber: r + 1,
+        item: employeeItem,
+      });
+      validEmployeeNumbers.push(cleanedId);
+      validEmployees.push(employeeItem);
     }
   }
 
@@ -297,6 +314,7 @@ export function reparseRowsWithColumns(
     validEmployeeNumbers,
     validEmployees,
     duplicateCount,
+    duplicates,
     emptyRowsCount,
     warnings,
   };
@@ -413,6 +431,7 @@ export async function parseEmployeeFile(
     validEmployeeNumbers: parsed.validEmployeeNumbers,
     validEmployees: parsed.validEmployees,
     duplicateCount: parsed.duplicateCount,
+    duplicates: parsed.duplicates,
     emptyRowsCount: parsed.emptyRowsCount,
     sampleData: parsed.validEmployeeNumbers.slice(0, 10),
     sampleDataWithNames: parsed.validEmployees.slice(0, 15),
